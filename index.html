@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>Portrait Flyby Reel — Mobile Edition</title>
+  <title>Portrait Flyby Reel — Mobile Edition v1.2</title>
   
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -293,8 +293,8 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
   <div id="app">
 	<header>
 	  <h1>Portrait Flyby Reel</h1>
-	  <span class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> Mobile Edition</span>
-	  <span class="hint">Upload → Create Path → Record 🎥</span>
+	  <span class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> v1.2</span>
+	  <span class="hint">Upload → Create Path → Record</span>
 	  <button id="showMobileHelp" style="margin-left:auto;padding:6px 12px;font-size:12px;background:var(--accent);color:#000;border:none;border-radius:8px;font-weight:600;">Help</button>
 	</header>
 
@@ -985,7 +985,10 @@ camera.position.set(0,0,4);
 	  camera.up.set(0,1,0);
 	  controls = new OrbitControls(camera, canvas);
 	  controls.enableDamping = false; controls.dampingFactor = 0;
-	  controls.enablePan = true; controls.enableZoom = true; controls.enableRotate = false;
+	  controls.enablePan = true; controls.enableZoom = true; 
+	  // MOBILE FIX: Enable rotation for touch devices (needed for touch controls to work)
+	  const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+	  controls.enableRotate = isMobileDevice; // TRUE on mobile, FALSE on desktop
 	  controls.target = new THREE.Vector3(0,0,0);
 	  controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
 	  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
@@ -6805,6 +6808,21 @@ console.log('[DIMS] Script loading...');
   if (isMobile) {
     console.log('[mobile] Mobile device detected, enabling optimizations');
     
+    // Hide Screen Record Mode button if direct recording is supported
+    const hasMediaRecorder = 'MediaRecorder' in window && typeof window.MediaRecorder === 'function';
+    if (hasMediaRecorder) {
+      console.log('[mobile] MediaRecorder supported - hiding Screen Record Mode button');
+      setTimeout(() => {
+        const btn = document.getElementById('mobileRecordBtn');
+        if (btn) {
+          btn.style.display = 'none';
+          console.log('[mobile] Screen Record Mode button hidden (direct recording available)');
+        }
+      }, 1000);
+    } else {
+      console.log('[mobile] MediaRecorder NOT supported - Screen Record Mode button visible');
+    }
+    
     // Reduce effects for performance on mobile
     setTimeout(() => {
       try {
@@ -7050,4 +7068,3 @@ console.log('[DIMS] Script loading...');
  // console.log('[quick] collapsibles active');
 })();
 </script>
-
