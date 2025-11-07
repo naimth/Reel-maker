@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>Portrait Flyby Reel — Mobile Edition v1.2</title>
+  <title>Portrait Flyby Reel — Mobile Edition v1.3</title>
   
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -42,7 +42,10 @@
 	.stack{display:flex; flex-direction:column; gap:6px}
 	.small{font-size:11px; color:var(--muted)}
 	.pill{font-size:11px; padding:4px 8px; border-radius:999px; background:#101018; border:1px solid #252535; display:inline-flex; align-items:center; gap:6px}
-	canvas{display:block; touch-action:none; cursor:grab; user-select:none}
+	canvas{display:block; touch-action:none; cursor:grab; user-select:none; pointer-events:auto;}
+@media (max-width: 768px) {
+  canvas { width: 100% !important; height: 100% !important; touch-action: none; }
+}
 	#overlay{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none}
 	#legend{position:absolute; bottom:10px; left:10px; background:rgba(0,0,0,.45); padding:8px 10px; border-radius:10px; font-size:11px}
 	#recDot{width:10px; height:10px; border-radius:50%; background:#f33; box-shadow:0 0 0 0 rgba(255,80,80,.7); animation:pulse 1.4s infinite}
@@ -57,8 +60,37 @@
 
 /* Mobile-specific styles */
 @media (max-width: 768px) {
-  #app { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr auto; }
-  #left { border-right: none; border-bottom: 1px solid #1f1f27; max-height: 60vh; overflow-y: auto; }
+  #app { 
+    grid-template-columns: 1fr; 
+    grid-template-rows: auto auto 1fr; 
+    height: 100vh;
+  }
+  #left { 
+    grid-row: 2;
+    grid-column: 1;
+    border-right: none; 
+    border-bottom: 1px solid #1f1f27; 
+    max-height: none;
+    overflow: visible;
+    position: relative;
+    z-index: 10;
+  }
+  #left.mobile-hidden {
+    display: none;
+  }
+  #right {
+    grid-row: 3;
+    grid-column: 1;
+    height: 100%;
+    min-height: 60vh;
+  }
+  #controls {
+    position: relative;
+    top: 0;
+    padding: 8px;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
   header { font-size: 14px; padding: 8px 12px; }
   header h1 { font-size: 14px; }
   .card { margin-bottom: 8px; padding: 10px; }
@@ -66,6 +98,37 @@
   label { font-size: 11px; }
   input[type=range] { width: 120px; }
   input[type=number], select { width: 80px; font-size: 12px; }
+  
+  /* All cards start collapsed on mobile */
+  .card.collapsible {
+    margin-bottom: 4px;
+  }
+  .card.collapsible > .card-body {
+    display: none;
+  }
+  .card.collapsible.open > .card-body {
+    display: block;
+  }
+}
+
+/* Toggle controls button (mobile only) */
+#toggleControlsBtn {
+  display: none;
+  position: fixed;
+  top: 60px;
+  left: 10px;
+  z-index: 1001;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+@media (max-width: 768px) {
+  #toggleControlsBtn { display: block; }
 }
 
 /* Full-screen mode for recording */
@@ -231,6 +294,9 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
   </style>
 </head>
 <body>
+  <!-- Toggle Controls Button (Mobile) -->
+  <button id="toggleControlsBtn">☰ Controls</button>
+
   <!-- Screen Record Mode Overlay -->
   <div id="screenRecordOverlay">
     <div id="overlayContent">
@@ -293,8 +359,8 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
   <div id="app">
 	<header>
 	  <h1>Portrait Flyby Reel</h1>
-	  <span class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> v1.2</span>
-	  <span class="hint">Upload → Create Path → Record</span>
+	  <span class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> v1.3</span>
+	  <span class="hint">Tap ☰ to show controls</span>
 	  <button id="showMobileHelp" style="margin-left:auto;padding:6px 12px;font-size:12px;background:var(--accent);color:#000;border:none;border-radius:8px;font-weight:600;">Help</button>
 	</header>
 
@@ -6808,6 +6874,40 @@ console.log('[DIMS] Script loading...');
   if (isMobile) {
     console.log('[mobile] Mobile device detected, enabling optimizations');
     
+    // Toggle controls button functionality
+    const toggleBtn = document.getElementById('toggleControlsBtn');
+    const leftPanel = document.getElementById('left');
+    let controlsVisible = false; // Start with controls hidden on mobile
+    
+    if (toggleBtn && leftPanel) {
+      // Start with controls hidden
+      leftPanel.classList.add('mobile-hidden');
+      toggleBtn.textContent = '☰ Show Controls';
+      
+      toggleBtn.addEventListener('click', () => {
+        controlsVisible = !controlsVisible;
+        if (controlsVisible) {
+          leftPanel.classList.remove('mobile-hidden');
+          toggleBtn.textContent = '✕ Hide Controls';
+        } else {
+          leftPanel.classList.add('mobile-hidden');
+          toggleBtn.textContent = '☰ Show Controls';
+        }
+      });
+      console.log('[mobile] Toggle controls button initialized');
+    }
+    
+    // Collapse all cards on mobile by default (except Quick Controls)
+    setTimeout(() => {
+      const cards = document.querySelectorAll('#controls .card.collapsible');
+      cards.forEach(card => {
+        if (card.id !== 'quickControlsCard') {
+          card.classList.remove('open');
+        }
+      });
+      console.log('[mobile] Cards collapsed on mobile');
+    }, 500);
+    
     // Hide Screen Record Mode button if direct recording is supported
     const hasMediaRecorder = 'MediaRecorder' in window && typeof window.MediaRecorder === 'function';
     if (hasMediaRecorder) {
@@ -6815,10 +6915,11 @@ console.log('[DIMS] Script loading...');
       setTimeout(() => {
         const btn = document.getElementById('mobileRecordBtn');
         if (btn) {
-          btn.style.display = 'none';
-          console.log('[mobile] Screen Record Mode button hidden (direct recording available)');
+          btn.style.display = 'none !important';
+          btn.remove(); // Just remove it entirely
+          console.log('[mobile] Screen Record Mode button removed (direct recording available)');
         }
-      }, 1000);
+      }, 2000);
     } else {
       console.log('[mobile] MediaRecorder NOT supported - Screen Record Mode button visible');
     }
@@ -7025,8 +7126,8 @@ console.log('[DIMS] Script loading...');
   if (isIOS) {
     setTimeout(() => {
       const hint = document.createElement('div');
-      hint.style.cssText = 'position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:rgba(138,210,255,0.9);color:#000;padding:12px 20px;border-radius:20px;font-size:13px;z-index:999;text-align:center;max-width:80%;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
-      hint.innerHTML = '💡 Try "Record" button first!<br><span style="font-size:11px;opacity:0.7;">🎥 = Screen Record Mode (backup option)</span>';
+      hint.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(138,210,255,0.9);color:#000;padding:12px 20px;border-radius:20px;font-size:13px;z-index:999;text-align:center;max-width:80%;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
+      hint.innerHTML = '💡 Tap ☰ to show controls<br><span style="font-size:11px;opacity:0.7;">Touch viewport to position camera</span>';
       document.body.appendChild(hint);
       setTimeout(() => {
         hint.style.transition = 'opacity 0.5s';
