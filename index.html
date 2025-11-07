@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>Portrait Flyby Reel — Mobile Edition v1.3</title>
+  <title>Portrait Flyby Reel — Mobile v1.4 FIXED</title>
   
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -219,40 +219,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* Mobile Record Mode button */
-#mobileRecordBtn {
-  display: none;
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #ff6b6b, #ff5252);
-  border: 3px solid white;
-  box-shadow: 0 4px 12px rgba(255, 82, 82, 0.4);
-  z-index: 1000;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 28px;
-  animation: mobileRecordPulse 2s ease-in-out infinite;
-}
-@keyframes mobileRecordPulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 4px 12px rgba(255, 82, 82, 0.4); }
-  50% { transform: scale(1.05); box-shadow: 0 6px 20px rgba(255, 82, 82, 0.6); }
-}
-@media (max-width: 768px) {
-  #mobileRecordBtn { display: flex; }
-}
-@media (min-width: 769px) {
-  #mobileRecordBtn { display: none !important; }
-}
-#mobileRecordBtn:active {
-  transform: scale(0.95);
-  animation: none;
-}
+/* Mobile record button removed - using direct recording */
 
 /* Touch feedback */
 .touch-feedback {
@@ -316,8 +283,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
   <!-- Tap to Exit Hint -->
   <div id="tapToExit">Tap anywhere to exit</div>
 
-  <!-- Mobile Record Button -->
-  <button id="mobileRecordBtn" title="Screen Record Mode">🎥</button>
+  <!-- Mobile Record Button removed - use direct recording instead -->
 
   <!-- Instructions Overlay -->
   <div id="instructionsOverlay">
@@ -359,8 +325,8 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
   <div id="app">
 	<header>
 	  <h1>Portrait Flyby Reel</h1>
-	  <span class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> v1.3</span>
-	  <span class="hint">Tap ☰ to show controls</span>
+	  <span class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> v1.4</span>
+	  <span class="hint">Touch viewport to move camera</span>
 	  <button id="showMobileHelp" style="margin-left:auto;padding:6px 12px;font-size:12px;background:var(--accent);color:#000;border:none;border-radius:8px;font-weight:600;">Help</button>
 	</header>
 
@@ -559,7 +525,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 	  <div class="stack">
 		<label class="row"><span><input type="checkbox" id="lockRoll" checked> Lock roll (0°)</span><span class="small">Drone‑like, no bank</span></label>
 		<label class="row"><span><input type="checkbox" id="invertPitch" checked> Invert vertical drag</span><span class="small">Drag up → move down</span></label>
-		<label class="row"><span><input type="checkbox" id="cylMode" checked> Cylindrical manual control</span><span class="small">Left/Right=φ, Up/Down=Z, Wheel=R. Always looks at focus.</span></label>
+		<label class="row"><span><input type="checkbox" id="cylMode"> Cylindrical manual control</span><span class="small">Left/Right=φ, Up/Down=Z, Wheel=R. Always looks at focus.</span></label>
 		<label class="row"><span><input type="checkbox" id="stickyOrbit" checked> Sticky orbit (toggle via click)</span><span class="small">Quick tap to latch/unlatch rotate</span></label>
 		<label>Zoom step (%)
 		  <span>
@@ -6874,28 +6840,46 @@ console.log('[DIMS] Script loading...');
   if (isMobile) {
     console.log('[mobile] Mobile device detected, enabling optimizations');
     
-    // Toggle controls button functionality
-    const toggleBtn = document.getElementById('toggleControlsBtn');
-    const leftPanel = document.getElementById('left');
-    let controlsVisible = false; // Start with controls hidden on mobile
+    // CRITICAL: Disable cylindrical mode on mobile (it blocks OrbitControls!)
+    setTimeout(() => {
+      const cylModeCheckbox = document.getElementById('cylMode');
+      if (cylModeCheckbox) {
+        cylModeCheckbox.checked = false;
+        // Trigger change event to update controls
+        cylModeCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+        console.log('[mobile] Cylindrical mode disabled for touch controls');
+      }
+    }, 100);
     
-    if (toggleBtn && leftPanel) {
-      // Start with controls hidden
-      leftPanel.classList.add('mobile-hidden');
-      toggleBtn.textContent = '☰ Show Controls';
+    // Toggle controls button functionality - delayed to ensure DOM is ready
+    setTimeout(() => {
+      const toggleBtn = document.getElementById('toggleControlsBtn');
+      const leftPanel = document.getElementById('left');
+      let controlsVisible = false; // Start with controls hidden on mobile
       
-      toggleBtn.addEventListener('click', () => {
-        controlsVisible = !controlsVisible;
-        if (controlsVisible) {
-          leftPanel.classList.remove('mobile-hidden');
-          toggleBtn.textContent = '✕ Hide Controls';
-        } else {
-          leftPanel.classList.add('mobile-hidden');
-          toggleBtn.textContent = '☰ Show Controls';
-        }
-      });
-      console.log('[mobile] Toggle controls button initialized');
-    }
+      if (toggleBtn && leftPanel) {
+        // Start with controls hidden
+        leftPanel.classList.add('mobile-hidden');
+        toggleBtn.textContent = '☰ Show Controls';
+        
+        toggleBtn.addEventListener('click', () => {
+          controlsVisible = !controlsVisible;
+          if (controlsVisible) {
+            leftPanel.classList.remove('mobile-hidden');
+            toggleBtn.textContent = '✕ Hide Controls';
+            toggleBtn.style.background = '#ff6b6b';
+          } else {
+            leftPanel.classList.add('mobile-hidden');
+            toggleBtn.textContent = '☰ Show Controls';
+            toggleBtn.style.background = 'var(--accent)';
+          }
+          console.log('[mobile] Controls toggled:', controlsVisible);
+        });
+        console.log('[mobile] Toggle controls button initialized');
+      } else {
+        console.error('[mobile] Toggle button or left panel not found!', {toggleBtn, leftPanel});
+      }
+    }, 500); // Wait half second for DOM to be ready
     
     // Collapse all cards on mobile by default (except Quick Controls)
     setTimeout(() => {
@@ -6979,137 +6963,29 @@ console.log('[DIMS] Script loading...');
   console.log('[mobile] OrbitControls native touch support active');
   }, 2000);
 
-  // Screen Record Mode functionality
-  const mobileRecordBtn = document.getElementById('mobileRecordBtn');
-  const screenRecordOverlay = document.getElementById('screenRecordOverlay');
-  const countdownEl = document.getElementById('countdown');
-  const recordingIndicator = document.getElementById('recordingIndicator');
-  const tapToExit = document.getElementById('tapToExit');
+  // Help button functionality (keep this)
   const instructionsOverlay = document.getElementById('instructionsOverlay');
   const closeInstructions = document.getElementById('closeInstructions');
-
-  let screenRecordModeActive = false;
-  let countdownInterval = null;
+  const showMobileHelp = document.getElementById('showMobileHelp');
 
   // Show instructions on first mobile visit
   if (isMobile && !localStorage.getItem('seenMobileInstructions')) {
     setTimeout(() => {
-      instructionsOverlay.classList.add('active');
+      if (instructionsOverlay) instructionsOverlay.classList.add('active');
     }, 2000);
     localStorage.setItem('seenMobileInstructions', 'true');
   }
 
   closeInstructions?.addEventListener('click', () => {
-    instructionsOverlay.classList.remove('active');
+    instructionsOverlay?.classList.remove('active');
   });
 
-  // Help button in header
-  const showMobileHelp = document.getElementById('showMobileHelp');
   showMobileHelp?.addEventListener('click', () => {
-    instructionsOverlay.classList.add('active');
+    instructionsOverlay?.classList.add('active');
   });
 
-  // Long press for instructions
-  let longPressTimer = null;
-  mobileRecordBtn?.addEventListener('touchstart', (e) => {
-    longPressTimer = setTimeout(() => {
-      instructionsOverlay.classList.add('active');
-    }, 800);
-  });
-  mobileRecordBtn?.addEventListener('touchend', () => {
-    if (longPressTimer) clearTimeout(longPressTimer);
-  });
-  mobileRecordBtn?.addEventListener('touchmove', () => {
-    if (longPressTimer) clearTimeout(longPressTimer);
-  });
-
-  mobileRecordBtn?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    if (screenRecordModeActive) {
-      exitScreenRecordMode();
-      return;
-    }
-
-    // Enter screen record mode
-    screenRecordModeActive = true;
-    screenRecordOverlay.classList.add('active');
-    
-    // Countdown
-    let count = 3;
-    countdownEl.textContent = count;
-    
-    countdownInterval = setInterval(() => {
-      count--;
-      if (count > 0) {
-        countdownEl.textContent = count;
-      } else {
-        clearInterval(countdownInterval);
-        startPreviewMode();
-      }
-    }, 1000);
-  });
-
-  function startPreviewMode() {
-    // Hide overlay
-    screenRecordOverlay.classList.remove('active');
-    
-    // Enter fullscreen mode
-    document.body.classList.add('fullscreen-mode');
-    
-    // Show recording indicator
-    recordingIndicator.classList.add('active');
-    
-    // Start the preview
-    const previewBtn = document.getElementById('previewBtn') || document.getElementById('qcPreview');
-    if (previewBtn && !previewBtn.disabled) {
-      previewBtn.click();
-    }
-    
-    // Show tap to exit hint after 2 seconds
-    setTimeout(() => {
-      tapToExit.classList.add('active');
-      
-      // Auto-hide after 3 seconds
-      setTimeout(() => {
-        tapToExit.classList.remove('active');
-      }, 3000);
-    }, 2000);
-    
-    // Make canvas tappable to exit
-    const canvas = document.querySelector('canvas');
-    if (canvas) {
-      canvas.addEventListener('click', exitScreenRecordMode, { once: false });
-    }
-  }
-
-  function exitScreenRecordMode() {
-    screenRecordModeActive = false;
-    document.body.classList.remove('fullscreen-mode');
-    recordingIndicator.classList.remove('active');
-    tapToExit.classList.remove('active');
-    
-    // Stop preview if running
-    const stopBtn = document.getElementById('stopBtn') || document.getElementById('qcStop');
-    if (stopBtn) {
-      stopBtn.click();
-    }
-  }
-
-  // Tap canvas to exit (add event listener)
-  setTimeout(() => {
-    const canvas = document.querySelector('canvas');
-    if (canvas) {
-      canvas.addEventListener('click', (e) => {
-        if (screenRecordModeActive) {
-          e.preventDefault();
-          e.stopPropagation();
-          exitScreenRecordMode();
-        }
-      });
-    }
-  }, 3000);
+  // Screen Record Mode removed - use direct recording instead
+  // All screen record functionality removed since button is gone
 
   // Prevent double-tap zoom on mobile
   let lastTap = 0;
