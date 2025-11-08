@@ -2488,6 +2488,12 @@ function __wheelZoomStep(t){
 // with this updated version.
 
 canvas.addEventListener('wheel', (e)=>{
+  // MOBILE FIX: On mobile, let OrbitControls handle zoom via native touch events
+  // Don't intercept wheel events which might be synthesized from touch gestures
+  if (isMobileDevice) {
+    return; // Let OrbitControls handle it
+  }
+  
   // Check for pan, playing, OR sticky orbit
   const panOrPlaying = (typeof panActive !== 'undefined' && panActive) || (typeof playing !== 'undefined' && playing);
   const isStickyOrbiting = window.__orbitLatched;
@@ -2600,6 +2606,20 @@ canvas.addEventListener('wheel', (e)=>{
 	try{ localStorage.setItem('toneMapSel', v); }catch(_){}
 	  });
 	} }
+	
+	// MOBILE FIX: Force controls to stay enabled on mobile devices
+	// This prevents any stray code from disabling touch interaction
+	if (isMobileDevice && controls && !playing) {
+	  // Clear stuck states
+	  if (window.__orbitLatched) window.__orbitLatched = false;
+	  if (panActive && !leftDown && !rightDown) panActive = false;
+	  
+	  // Ensure controls are enabled
+	  if (!controls.enabled) {
+		controls.enabled = true;
+	  }
+	}
+	
 	if (controls && controls.enabled && !panActive) {
 	  const t = safeTarget(); if (t) t.copy(focus);
 	  controls.update();
@@ -6844,7 +6864,11 @@ console.log('[DIMS] Script loading...');
     
     // CRITICAL: Prevent sticky orbit from disabling controls on mobile
     window.__orbitLatched = false;
-    setInterval(() => { if (window.__orbitLatched) window.__orbitLatched = false; }, 100);
+    setInterval(() => { 
+      if (window.__orbitLatched) window.__orbitLatched = false;
+      // Also prevent panActive from getting stuck
+      if (panActive && !leftDown && !rightDown) panActive = false;
+    }, 100);
     
     // CRITICAL: Disable cylindrical mode on mobile (it blocks OrbitControls!)
     setTimeout(() => {
