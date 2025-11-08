@@ -316,9 +316,6 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
         <li><strong>Trim & Share:</strong><br>Photos app → trim → upload to Instagram!</li>
       </ol>
       <button id="closeInstructions" class="primary">Got It!</button>
-      <p style="margin-top: 20px; font-size: 12px; color: #999;">
-        💡 Tip: Use Triple-Pass Smoothing and high Butter values for best results!
-      </p>
     </div>
   </div>
 
@@ -787,11 +784,9 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 	<main id="right">
 	  <canvas id="gl"></canvas>
 	  <div id="overlay" style="display:none"><div class="pill"><div id="recDot"></div> Recording…</div></div>
-	  <div id="legend">Left‑drag (cylindrical): φ | Up/Down: Z | Wheel: R. Right‑drag/two‑finger: Pan. Shift+Click picks focus.</div>
 	</main>
 
 	<footer style="grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-top:1px solid #1f1f27; font-size:12px; color:#fff9">
-	  <div>Tip: Higher <b>FOV</b> = more drama; vary <b>φ</b> and <b>Z</b> for billboard flybys. Keep <b>Min/Max Distance</b> reasonable.</div>
 	  <div>© 2025 — Single‑file demo</div>
 	</footer>
   </div>
@@ -2462,7 +2457,7 @@ function __wheelZoomStep(t){
 
 	if (Math.abs(__wheelZoomVel) < 0.01){
 		// Cleanup
-		if (window.__orbitLatched) {
+		if (window.__orbitLatched && !isMobileDevice) { // Don't disable controls on mobile
 		  // We stayed latched: prime the next orbit move with a fresh baseline
 		  try { startVec.copy(camera.position).sub(focus); } catch (_) {}
 		  // Keep controls disabled during sticky manual rotation
@@ -6839,6 +6834,10 @@ console.log('[DIMS] Script loading...');
   // Mobile detection and optimization
   if (isMobile) {
     console.log('[mobile] Mobile device detected, enabling optimizations');
+    
+    // CRITICAL: Prevent sticky orbit from disabling controls on mobile
+    window.__orbitLatched = false;
+    setInterval(() => { if (window.__orbitLatched) window.__orbitLatched = false; }, 100);
     
     // CRITICAL: Disable cylindrical mode on mobile (it blocks OrbitControls!)
     setTimeout(() => {
