@@ -994,6 +994,9 @@ let __leftClickCandidate = false, __rightClickCandidate = false;
 	let pathFovCurve = null;
 	let pathTimeMap = null;
 
+	// CRITICAL FIX: Make isMobileDevice global so it's accessible everywhere (especially in __wheelZoomStep)
+	const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 	try{
 	  renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:false });
 	  renderer.autoClear = false; // Important for multi-pass rendering
@@ -1014,7 +1017,7 @@ camera.position.set(0,0,4);
 	  controls.enableDamping = false; controls.dampingFactor = 0;
 	  controls.enablePan = true; controls.enableZoom = true; 
 	  // MOBILE FIX: Enable rotation for touch devices (needed for touch controls to work)
-	  const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+	  // isMobileDevice is now defined globally above
 	  controls.enableRotate = isMobileDevice; // TRUE on mobile, FALSE on desktop
 	  controls.target = new THREE.Vector3(0,0,0);
 	  controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
