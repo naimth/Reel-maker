@@ -259,7 +259,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 
 
   </style>
-</head>
+\n<style>#gl{touch-action:manipulation;}</style>\n</head>
 <body>
   <!-- Toggle Controls Button (Mobile) -->
   <button id="toggleControlsBtn">☰ Controls</button>
@@ -7103,7 +7103,47 @@ console.log('[DIMS] Script loading...');
   const qc = document.getElementById('quickControlsCard'); if (qc) qc.classList.add('open');
  // console.log('[quick] collapsibles active');
 })();
-</script>
+// --- Touch: double-tap => run the desktop perpendicular command on mobile (desktop unaffected)
+(() => {
+  const isTouchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  if (!isTouchCapable) return; // desktop: do nothing
+  const el = document.getElementById('gl') || document.querySelector('canvas');
+  if (!el) return;
+
+  // Make double-tap more tolerant on mobile
+  let lastUpTime = 0, lastX = 0, lastY = 0;
+  const TAP_MAX_DELAY = 360;     // ms between taps
+  const TAP_MAX_DIST  = 24;      // px movement allowance
+
+  el.addEventListener('pointerup', (e) => {
+    if (e.pointerType !== 'touch' || e.isPrimary === false) return;
+    const now = performance.now();
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+
+    if ((now - lastUpTime) < TAP_MAX_DELAY && (dx*dx + dy*dy) < (TAP_MAX_DIST*TAP_MAX_DIST)) {
+      // Double‑tap confirmed: prefer triggering the actual perpendicular action button,
+      // fallback to a synthetic dblclick if not present.
+      const pb = document.getElementById('perpendicularBtn');
+      if (pb) {
+        try { pb.click(); e.preventDefault(); } catch(_) {}
+      } else {
+        const dbl = new MouseEvent('dblclick', {
+          bubbles: true,
+          cancelable: true,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          button: 0,
+          detail: 2
+        });
+        el.dispatchEvent(dbl);
+        try { e.preventDefault(); } catch(_) {}
+      }
+    }
+    lastUpTime = now;
+    lastX = e.clientX; lastY = e.clientY;
+  }, { passive: false, capture: true });
+})();</script>
 
 
 // /* MOBILE sticky kill-switch */ keep all sticky features off on touch devices (no effect on desktop)
