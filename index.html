@@ -1516,6 +1516,8 @@ finalPass.needsSwap = true;
 finalComposer.addPass(finalPass);
 finalPass.uniforms.uFade = { value: 1.0 };
 fadeUniform = finalPass.uniforms.uFade;
+// Expose fadeUniform globally for crossfade transitions
+try { globalThis.fadeUniform = fadeUniform; window.fadeUniform = fadeUniform; } catch(_){}
 	}
 	
 	function createProceduralDirtTexture() {
@@ -2631,7 +2633,7 @@ canvas.addEventListener('wheel', (e)=>{
 	const isFinished = elapsedTime >= durationMs;
 	const linearTime = isFinished ? 1.0 : elapsedTime / durationMs;
 	// --- Fade in/out controller (2s each) ---
-	if (fadeUniform){ 
+	if (fadeUniform && !globalThis.__crossfadeActive){ 
 	  const fadeMs = 2000;
 	  const fin = Math.min(1, Math.max(0, elapsedTime / fadeMs));
 	  const fout = Math.min(1, Math.max(0, (durationMs - elapsedTime) / fadeMs));
@@ -2832,7 +2834,7 @@ canvas.addEventListener('wheel', (e)=>{
 	// 2. Render BASE layer and combine
 	camera.layers.set(BASE_LAYER);
 	
-if (fadeUniform && !playing){ 
+if (fadeUniform && !playing && !globalThis.__crossfadeActive){ 
   fadeUniform.value = 1.0; 
   if (photoMesh && photoMesh.material){ photoMesh.material.opacity = 1.0; /* leave transparent=true ok */ }
   if (photoCoat && photoCoat.material){ photoCoat.material.opacity = 1.0; }
@@ -5994,14 +5996,15 @@ function __overlayCrossfadeThenSwap(index, entry, dur){
     const mat = new Ctor();
     try {
       if (pmOld.material.color && mat.color) mat.color.copy(pmOld.material.color);
-      ['metalness','roughness','side','blending','depthTest'].forEach(k=>{ if (pmOld.material[k] !== undefined) mat[k] = pmOld.material[k]; });
+      ['metalness','roughness','blending','depthTest'].forEach(k=>{ if (pmOld.material[k] !== undefined) mat[k] = pmOld.material[k]; });
       if (pmOld.material.emissive && mat.emissive) mat.emissive.copy(pmOld.material.emissive);
       ['map','emissiveMap','normalMap','envMap','clearcoatMap','clearcoatNormalMap'].forEach(k=>{ if (pmOld.material[k]) mat[k] = pmOld.material[k]; });
     } catch(_){}
-    mat.transparent = true;
-    mat.opacity = 1.0;
-    mat.depthWrite = true;    // keep world occluded
-    mat.depthTest  = true;
+    mat.side = THREE.DoubleSide;  // Render from both sides so fade is visible from any angle
+    mat.transparent = true;       // Enable transparency from the start
+    mat.opacity = 1.0;             // Start fully opaque
+    mat.depthWrite = true;         // Write to depth buffer to occlude background
+    mat.depthTest  = true;         // Test against depth buffer
     const mesh = new THREE.Mesh(pmOld.geometry, mat);
     mesh.position.copy(pmOld.position);
     mesh.quaternion.copy(pmOld.quaternion);
@@ -6014,14 +6017,15 @@ function __overlayCrossfadeThenSwap(index, entry, dur){
     const mat = new Ctor();
     try {
       if (pcOld.material.color && mat.color) mat.color.copy(pcOld.material.color);
-      ['metalness','roughness','clearcoat','clearcoatRoughness','side','blending','depthTest'].forEach(k=>{ if (pcOld.material[k] !== undefined) mat[k] = pcOld.material[k]; });
+      ['metalness','roughness','clearcoat','clearcoatRoughness','blending','depthTest'].forEach(k=>{ if (pcOld.material[k] !== undefined) mat[k] = pcOld.material[k]; });
       if (pcOld.material.emissive && mat.emissive) mat.emissive.copy(pcOld.material.emissive);
       ['map','emissiveMap','normalMap','envMap','clearcoatMap','clearcoatNormalMap'].forEach(k=>{ if (pcOld.material[k]) mat[k] = pcOld.material[k]; });
     } catch(_){}
-    mat.transparent = true;
-    mat.opacity = 1.0;
-    mat.depthWrite = true;
-    mat.depthTest  = true;
+    mat.side = THREE.DoubleSide;  // Render from both sides so fade is visible from any angle
+    mat.transparent = true;       // Enable transparency from the start
+    mat.opacity = 1.0;             // Start fully opaque
+    mat.depthWrite = true;         // Write to depth buffer
+    mat.depthTest  = true;         // Test against depth buffer
     const mesh = new THREE.Mesh(pcOld.geometry, mat);
     mesh.position.copy(pcOld.position);
     mesh.quaternion.copy(pcOld.quaternion);
@@ -6030,6 +6034,10 @@ function __overlayCrossfadeThenSwap(index, entry, dur){
   })();
   oldGroup.renderOrder = (pmOld.renderOrder || 0) + 5;
   gt.scene.add(oldGroup);
+  console.log('[crossfade] Old group created:', oldGroup.children.length, 'children');
+  oldGroup.children.forEach((c, i) => {
+    console.log(`  [${i}] side=${c.material.side}, transparent=${c.material.transparent}, opacity=${c.material.opacity}`);
+  });
 
   // 3) Build the new originals (geometry for new dimensions)
   //    We temporarily set gt.photoMesh to old to keep API stable, then rebuild.
@@ -6054,10 +6062,11 @@ function __overlayCrossfadeThenSwap(index, entry, dur){
     const mat = new Ctor();
     try {
       if (pmNew.material.color && mat.color) mat.color.copy(pmNew.material.color);
-      ['metalness','roughness','side','blending'].forEach(k=>{ if (pmNew.material[k] !== undefined) mat[k] = pmNew.material[k]; });
+      ['metalness','roughness','blending'].forEach(k=>{ if (pmNew.material[k] !== undefined) mat[k] = pmNew.material[k]; });
       if (pmNew.material.emissive && mat.emissive) mat.emissive.copy(pmNew.material.emissive);
       ['map','emissiveMap','normalMap','envMap','clearcoatMap','clearcoatNormalMap'].forEach(k=>{ if (pmNew.material[k]) mat[k] = pmNew.material[k]; });
     } catch(_){}
+    mat.side = THREE.DoubleSide;  // Render from both sides so fade is visible from any angle
     mat.transparent = true;
     mat.opacity = 0.0;
     mat.depthWrite = false;
@@ -6074,10 +6083,11 @@ function __overlayCrossfadeThenSwap(index, entry, dur){
     const mat = new Ctor();
     try {
       if (pcNew.material.color && mat.color) mat.color.copy(pcNew.material.color);
-      ['metalness','roughness','clearcoat','clearcoatRoughness','side','blending'].forEach(k=>{ if (pcNew.material[k] !== undefined) mat[k] = pcNew.material[k]; });
+      ['metalness','roughness','clearcoat','clearcoatRoughness','blending'].forEach(k=>{ if (pcNew.material[k] !== undefined) mat[k] = pcNew.material[k]; });
       if (pcNew.material.emissive && mat.emissive) mat.emissive.copy(pcNew.material.emissive);
       ['map','emissiveMap','normalMap','envMap','clearcoatMap','clearcoatNormalMap'].forEach(k=>{ if (pcNew.material[k]) mat[k] = pcNew.material[k]; });
     } catch(_){}
+    mat.side = THREE.DoubleSide;  // Render from both sides so fade is visible from any angle
     mat.transparent = true;
     mat.opacity = 0.0;
     mat.depthWrite = false;
@@ -6090,17 +6100,33 @@ function __overlayCrossfadeThenSwap(index, entry, dur){
   })();
   inGroup.renderOrder = oldGroup.renderOrder + 1;
   gt.scene.add(inGroup);
+  console.log('[crossfade] New group created:', inGroup.children.length, 'children');
+  inGroup.children.forEach((c, i) => {
+    console.log(`  [${i}] side=${c.material.side}, transparent=${c.material.transparent}, opacity=${c.material.opacity}`);
+  });
 
   // 5) Crossfade both groups
   const start = performance.now();
   const D = Number.isFinite(dur) ? dur : 900;
   (function step(){
     const t = Math.min(1, (performance.now() - start) / D);
+    // Fade out old group
     for (const obj of oldGroup.children) {
-      if (obj.material) { obj.material.opacity = 1 - t; obj.material.needsUpdate = true; }
+      if (obj.material) { 
+        obj.material.opacity = 1 - t;
+        obj.material.needsUpdate = true;
+      }
     }
+    // Fade in new group
     for (const obj of inGroup.children) {
-      if (obj.material) { obj.material.opacity = t; obj.material.needsUpdate = true; }
+      if (obj.material) { 
+        obj.material.opacity = t; 
+        obj.material.needsUpdate = true; 
+      }
+    }
+    // Debug logging every 10 frames
+    if (Math.floor(t * 100) % 10 === 0) {
+      console.log(`[crossfade] t=${t.toFixed(3)}, oldOpacity=${(1-t).toFixed(3)}, newOpacity=${t.toFixed(3)}`);
     }
     if (t < 1) return requestAnimationFrame(step);
 
@@ -6429,16 +6455,13 @@ function waitShaderReady(material, tries, onReady, onTimeout){
 </script>
 
 <script type="module">
-// === DIMENSION DEBUG VERSION ===
+// === Deck ↔ Path Bridge (fix-dim-fade v2) ===
 console.log('[DIMS] Script loading...');
 (() => {
   console.log('[DIMS] IIFE starting');
   const gt = globalThis;
   
   console.log('[DIMS] Starting dimension handler');
-  console.log('[DIMS] gt.deck exists?', !!gt.deck);
-  console.log('[DIMS] gt.__deck_ingestFileArray exists?', typeof gt.__deck_ingestFileArray);
-  console.log('[DIMS] gt.__deck_crossfadeTo exists?', typeof gt.__deck_crossfadeTo);
   
   // 1) Enhance deck loader
   let deckLoadRetries = 0;
@@ -6536,7 +6559,6 @@ console.log('[DIMS] Script loading...');
 		console.log('[DIMS] Initialized globals from deck[0]:', gt.photoWidth, gt.photoHeight);
 	  }
 	  
-	  // ADD THIS BLOCK:
 	  // Ensure deck[0] has the current photoTex if it's null
 	  if (deck[0] && !deck[0].texture && gt.photoTex) {
 		deck[0].texture = gt.photoTex;
@@ -6561,302 +6583,302 @@ console.log('[DIMS] Script loading...');
 	}
 	
 	gt.__deck_crossfadeTo = async function(index, durOverride) {
-	  console.log('[DIMS] === CROSSFADE START ===');
-	  console.log('[DIMS] Target index:', index);
-	  console.log('[DIMS] Current globals:', {
-		photoWidth: gt.photoWidth,
-		photoHeight: gt.photoHeight,
-		photoAspect: gt.photoAspect
-	  });
+	  console.log('[CROSSFADE] === START ===');
+	  console.log('[CROSSFADE] Target index:', index);
 	  
 	  const deck = gt.deck || [];
-	  console.log('[DIMS] Deck length:', deck.length);
-	  
 	  const entry = deck[index];
 	  
 	  if (!entry) {
-		console.error('[DIMS] No entry at index', index);
-		return origCrossfade.call(this, index, durOverride);
+		console.error('[CROSSFADE] No entry at index', index);
+		return;
 	  }
 	  
-	  // ADD THIS BLOCK - Load texture on-demand if missing
+	  // Load texture on-demand if missing
 	  if (!entry.texture && entry.file) {
-		console.log('[DIMS] Entry missing texture, loading on-demand...');
+		console.log('[CROSSFADE] Loading texture on-demand...');
 		try {
 		  const bmp = await createImageBitmap(entry.file);
-		  
-		  // Convert ImageBitmap to canvas to avoid serialization issues
 		  const c = document.createElement('canvas');
 		  c.width = bmp.width;
 		  c.height = bmp.height;
 		  const ctx = c.getContext('2d', {alpha:false});
 		  ctx.drawImage(bmp, 0, 0);
 		  
-		  // Use the proper texture creation helper
 		  const baseMap = gt.photoMesh?.material?.map;
 		  const createProperTextureFn = gt.createProperTexture || window.createProperTexture || globalThis.createProperTexture;
 		  
 		  if (createProperTextureFn) {
-		    entry.texture = createProperTextureFn(c, baseMap);
+			entry.texture = createProperTextureFn(c, baseMap);
 		  } else {
-		    console.error('[DIMS] createProperTexture function not found!');
-		    // Fallback to basic texture creation
-		    const TexCtor = (baseMap && baseMap.constructor) ? baseMap.constructor : (gt.THREE && gt.THREE.Texture);
-		    if (TexCtor) {
-		      entry.texture = new TexCtor(c);
-		      entry.texture.colorSpace = gt.THREE.SRGBColorSpace || 'srgb';
-		      entry.texture.flipY = false;
-		      entry.texture.needsUpdate = true;
-		    }
+			const TexCtor = (baseMap && baseMap.constructor) ? baseMap.constructor : (gt.THREE && gt.THREE.Texture);
+			if (TexCtor) {
+			  entry.texture = new TexCtor(c);
+			  entry.texture.colorSpace = gt.THREE.SRGBColorSpace || 'srgb';
+			  entry.texture.flipY = false;
+			  entry.texture.needsUpdate = true;
+			}
 		  }
 		  
 		  if (entry.texture && baseMap && typeof mirrorTextureSettings === 'function') {
-		    mirrorTextureSettings(entry.texture, baseMap);
+			mirrorTextureSettings(entry.texture, baseMap);
 		  }
 		  
 		  if (entry.texture) {
-		    entry.texture.needsUpdate = true;
-		    console.log('[DIMS] Loaded texture on-demand for entry', index);
+			entry.texture.needsUpdate = true;
 		  }
 		} catch (err) {
-		  console.error('[DIMS] Failed to load texture on-demand:', err);
+		  console.error('[CROSSFADE] Failed to load texture:', err);
 		}
 	  }
 	  
-	  
-	  console.log('[DIMS] Target entry:', {
-		index,
-		width: entry.width,
-		height: entry.height,
-		aspect: entry.aspect,
-		hasTexture: !!entry.texture
-	  });
-	  
-	  const prevWidth = gt.photoWidth;
-	  const prevHeight = gt.photoHeight;
-	  const nextWidth = entry.width;
-	  const nextHeight = entry.height;
-	  
-	  console.log('[DIMS] Dimension comparison:', {
-		from: `${prevWidth}×${prevHeight}`,
-		to: `${nextWidth}×${nextHeight}`,
-		changed: (prevWidth !== nextWidth) || (prevHeight !== nextHeight)
-	  });
-	  
+	  // Recover dimensions from texture if missing
 	  if (!entry.width || !entry.height) {
-		console.warn('[DIMS] Entry missing dimensions!');
 		if (entry.texture?.image) {
 		  entry.width = entry.texture.image.width;
 		  entry.height = entry.texture.image.height;
 		  entry.aspect = entry.width / entry.height;
-		  console.log('[DIMS] Recovered from texture:', entry.width, entry.height);
 		}
 	  }
 	  
-	  if (entry.width && entry.height) {
-		gt.photoWidth = entry.width;
-		gt.photoHeight = entry.height;
-		gt.photoAspect = entry.aspect || (entry.width / entry.height);
-		console.log('[DIMS] Updated globals:', gt.photoWidth, gt.photoHeight);
-	  }
-	  
-	  const dimsChanged = (prevWidth !== gt.photoWidth) || (prevHeight !== gt.photoHeight);
-	  
-	  console.log('[DIMS] Decision:', {
-		dimsChanged,
-		willUseShaderCrossfade: !dimsChanged,
-		willRebuildMesh: dimsChanged
-	  });
-	  
-	  if (!dimsChanged) {
-		console.log('[DIMS] Using fast shader crossfade (same dimensions)');
-		return origCrossfade.call(this, index, durOverride);
-	  }
-	  
-	  console.log('[DIMS] *** REBUILDING MESH FOR NEW DIMENSIONS ***');
-// >>> PATCH: hide coat during REBUILD fade (prevents occluding old image atop new fade)
-let __coatWasVisible = false, __coatPrevOpacity = 1;
-try {
-  const pc = gt.photoCoat;
-  if (pc) {
-    __coatWasVisible = pc.visible;
-    if (pc.material && typeof pc.material.opacity === 'number') __coatPrevOpacity = pc.material.opacity;
-    pc.visible = false; // critical: no occlusion during fade
-  }
-} catch(_) {}
-// <<< PATCH end
-
-	  
-	  const pm = gt.photoMesh;
-	  const pc = gt.photoCoat;
-	  if (!pm) {
-		console.error('[DIMS] No photoMesh!');
-		return;
-	  }
+	  const prevWidth = gt.photoWidth;
+	  const prevHeight = gt.photoHeight;
+	  const dimsChanged = (prevWidth !== entry.width) || (prevHeight !== entry.height);
 	  
 	  const dur = Number.isFinite(durOverride) 
 		? durOverride 
 		: (parseFloat(document.getElementById('fadeMs')?.value || '900') || 900);
-// >>> PATCH: schedule coat restore/map sync after REBUILD fade duration
-try {
-  setTimeout(() => {
-    try {
-      const pc = gt.photoCoat;
-      const pm = gt.photoMesh;
-      if (pc && pc.material && pm && pm.material && pm.material.map) {
-        pc.material.map = pm.material.map;
-        if ('needsUpdate' in pc.material.map) pc.material.map.needsUpdate = true;
-        pc.material.needsUpdate = true;
-      }
-      if (pc) {
-        pc.visible = __coatWasVisible;
-        if (pc.material && typeof __coatPrevOpacity === 'number') pc.material.opacity = __coatPrevOpacity;
-      }
-    } catch(_){}
-  }, Math.max(0, (typeof dur === 'number' ? dur : 900) + 20));
-} catch(_) {}
-// <<< PATCH end
-
 	  
-	  console.log('[DIMS] Fade duration:', dur);
+	  console.log('[CROSSFADE] Duration:', dur, 'dimsChanged:', dimsChanged);
+	  
+	  // Get all meshes - use window references which are kept in sync
+	  const pm = window.photoMesh || gt.photoMesh;
+	  if (!pm) {
+		console.error('[CROSSFADE] No photoMesh found!');
+		return;
+	  }
+	  
+	  // Collect all meshes - photoMesh and photoCoat are the main ones that need fading
+	  // backMesh and sidesMesh are in the same parent group
+	  const allMeshes = [];
+	  
+	  // Add photoMesh and photoCoat (rendered separately at the end)
+	  if (pm) allMeshes.push(pm);
+	  const pc = window.photoCoat || gt.photoCoat;
+	  if (pc) allMeshes.push(pc);
+	  
+	  // Also get backMesh and sidesMesh from the parent group
+	  if (pm.parent && pm.parent.isGroup) {
+		pm.parent.children.forEach(child => {
+		  if (child.isMesh && child.material && !allMeshes.includes(child)) {
+			allMeshes.push(child);
+		  }
+		});
+	  }
+	  
+	  console.log(`[CROSSFADE] Found ${allMeshes.length} meshes to fade:`, allMeshes.map(m => m.uuid.slice(0,8)));
+	  
+	  // Store original material states so we can restore them properly
+	  // (some materials like the invisible front/back of sidesMesh need to stay transparent)
+	  const originalMaterialStates = new Map();
+	  allMeshes.forEach(m => {
+		if (!m) return;
+		const materials = Array.isArray(m.material) ? m.material : [m.material];
+		materials.forEach(mat => {
+		  if (mat && !originalMaterialStates.has(mat)) {
+			originalMaterialStates.set(mat, {
+			  transparent: mat.transparent,
+			  opacity: mat.opacity !== undefined ? mat.opacity : 1.0,
+			  depthWrite: mat.depthWrite
+			});
+		  }
+		});
+	  });
+	  
+	  // Prevent render loop from interfering
+	  globalThis.__crossfadeActive = true;
 	  
 	  const halfDur = dur / 2;
 	  
-	  
-	  // === PATCH: use non-cloning duplicates and hide originals ===
-	  try { if (pm) pm.visible = false; } catch(_){}
-	  try { if (pc) pc.visible = false; } catch(_){}
-	  
-	  const oldMeshes = [];
-	  if (pm) {
-	    const OldMatCtor = (pm.material && pm.material.constructor) ? pm.material.constructor : THREE.MeshBasicMaterial;
-	    const oldMat = new OldMatCtor();
-	    try {
-	      if (pm.material.color && oldMat.color) oldMat.color.copy(pm.material.color);
-	      ['metalness','roughness','side','blending','depthTest'].forEach(k=>{ if (pm.material[k] !== undefined) oldMat[k] = pm.material[k]; });
-	      if (pm.material.emissive && oldMat.emissive) oldMat.emissive.copy(pm.material.emissive);
-	      ['map','emissiveMap','normalMap','envMap','clearcoatMap','clearcoatNormalMap'].forEach(k=>{ if (pm.material[k]) oldMat[k] = pm.material[k]; });
-	    } catch(_){}
-	    oldMat.transparent = true;
-	    oldMat.opacity = 1.0;
-	    oldMat.depthWrite = false;
-	    const oldMesh = new THREE.Mesh(pm.geometry, oldMat);
-	    try { oldMesh.position.copy(pm.position); oldMesh.quaternion.copy(pm.quaternion); oldMesh.scale.copy(pm.scale); } catch(_){}
-	    try { oldMesh.renderOrder = (pm.renderOrder || 0) - 1; } catch(_){}
-	    gt.scene.add(oldMesh);
-	    oldMeshes.push(oldMesh);
-	  }
-	  if (pc) {
-	    const CoatCtor = (pc.material && pc.material.constructor) ? pc.material.constructor : THREE.MeshPhysicalMaterial;
-	    const oldCoatMat = new CoatCtor();
-	    try {
-	      if (pc.material.color && oldCoatMat.color) oldCoatMat.color.copy(pc.material.color);
-	      ['metalness','roughness','clearcoat','clearcoatRoughness','side','blending','depthTest'].forEach(k=>{ if (pc.material[k] !== undefined) oldCoatMat[k] = pc.material[k]; });
-	      if (pc.material.emissive && oldCoatMat.emissive) oldCoatMat.emissive.copy(pc.material.emissive);
-	      ['map','emissiveMap','normalMap','envMap','clearcoatMap','clearcoatNormalMap'].forEach(k=>{ if (pc.material[k]) oldCoatMat[k] = pc.material[k]; });
-	    } catch(_){}
-	    oldCoatMat.transparent = true;
-	    oldCoatMat.opacity = 1.0;
-	    oldCoatMat.depthWrite = false;
-	    const oldCoat = new THREE.Mesh(pc.geometry, oldCoatMat);
-	    try { oldCoat.position.copy(pc.position); oldCoat.quaternion.copy(pc.quaternion); oldCoat.scale.copy(pc.scale); } catch(_){}
-	    try { oldCoat.renderOrder = (pc.renderOrder || 0) - 1; } catch(_){}
-	    gt.scene.add(oldCoat);
-	    oldMeshes.push(oldCoat);
-	  }
-	  // === END PATCH ===
-// Fade out old clones (not the real meshes)
+	  // === PHASE 1: FADE OUT ===
 	  const startTime1 = performance.now();
+	  
 	  function fadeOutStep() {
 		const elapsed = performance.now() - startTime1;
 		const t = Math.min(1.0, elapsed / halfDur);
 		const opacity = 1.0 - t;
 		
-		oldMeshes.forEach(m => {
-		  if (m && m.material) {
-			m.material.opacity = opacity;
-		  }
+		allMeshes.forEach(m => {
+		  if (!m) return;
+		  // Handle both single materials and material arrays
+		  const materials = Array.isArray(m.material) ? m.material : [m.material];
+		  materials.forEach(mat => {
+			if (!mat) return;
+			const orig = originalMaterialStates.get(mat);
+			// Only fade materials that were originally visible
+			if (orig && orig.opacity > 0) {
+			  mat.transparent = true;
+			  mat.opacity = orig.opacity * (1 - t);  // Fade from original opacity to 0
+			  mat.needsUpdate = true;
+			}
+		  });
 		});
 		
 		if (t < 1.0) {
 		  requestAnimationFrame(fadeOutStep);
 		} else {
-		  // Midpoint - rebuild
-		  try {
-			console.log('[DIMS] Midpoint - swapping and rebuilding');
-			
-			if (entry.texture) {
-			  gt.photoTex = entry.texture;
-			  window.photoTex = entry.texture;
-			  console.log('[DIMS] Set photoTex');
-			}
-			
-			if (typeof gt.createOrUpdatePhotoMesh === 'function') {
-			  console.log('[DIMS] Calling createOrUpdatePhotoMesh...');
-			  gt.createOrUpdatePhotoMesh();
-			  console.log('[DIMS] createOrUpdatePhotoMesh complete');
-			  
-			  // Set new meshes to opacity 0
-			  const newPm = gt.photoMesh;
-			  const newPc = gt.photoCoat;
-			  if (newPm && newPm.material) {
-				newPm.material.transparent = true;
-				newPm.material.opacity = 0.0;
-				newPm.material.needsUpdate = true;
-			  }
-			  if (newPc && newPc.material) {
-				newPc.material.transparent = true;
-				newPc.material.opacity = 0.0;
-				newPc.material.needsUpdate = true;
-			  }
-			  
-			  gt.deckIndex = index;
-			  console.log('[DIMS] Updated deckIndex to:', index);
-			  
-			  // Fade in new meshes
-			  console.log('[DIMS] Fading in new mesh');
-			  const startTime2 = performance.now();
-			  function fadeInStep() {
-				const elapsed = performance.now() - startTime2;
-				const t = Math.min(1.0, elapsed / halfDur);
-				const opacity = t;
-				
-				if (newPm && newPm.material) newPm.material.opacity = opacity;
-				if (newPc && newPc.material) newPc.material.opacity = opacity;
-				
-				if (t < 1.0) {
-				  requestAnimationFrame(fadeInStep);
-				} else {
-				  // Clean up old clones
-				  oldMeshes.forEach(m => {
-					gt.scene.remove(m);
-					if (m.geometry) m.geometry.dispose();
-					if (m.material) m.material.dispose();
-				  });
-				  console.log('[DIMS] === CROSSFADE COMPLETE ===');
+		  // === MIDPOINT: SWAP/REBUILD ===
+		  console.log('[CROSSFADE] Fade-out complete, rebuilding...');
+		  
+		  // Update global dimensions
+		  if (entry.width && entry.height) {
+			gt.photoWidth = entry.width;
+			gt.photoHeight = entry.height;
+			gt.photoAspect = entry.aspect || (entry.width / entry.height);
+		  }
+		  
+		  // Set the new texture
+		  if (entry.texture) {
+			gt.photoTex = entry.texture;
+			window.photoTex = entry.texture;
+		  }
+		  
+		  // Rebuild mesh if dimensions changed, otherwise just swap texture
+		  if (dimsChanged && typeof gt.createOrUpdatePhotoMesh === 'function') {
+			gt.createOrUpdatePhotoMesh();
+		  } else {
+			// Same dimensions - just swap the texture
+			try {
+			  const currentPm = gt.photoMesh;
+			  if (currentPm && currentPm.material && entry.texture) {
+				if (typeof mirrorTextureSettings === 'function' && currentPm.material.map) {
+				  mirrorTextureSettings(entry.texture, currentPm.material.map);
 				}
+				currentPm.material.map = entry.texture;
+				currentPm.material.needsUpdate = true;
 			  }
-			  requestAnimationFrame(fadeInStep);
-			}
-		  } catch (err) {
-			console.error('[DIMS] Rebuild error:', err);
-			// Clean up on error
-			oldMeshes.forEach(m => {
-			  gt.scene.remove(m);
-			  if (m.geometry) m.geometry.dispose();
-			  if (m.material) m.material.dispose();
+			} catch(_){}
+		  }
+		  
+		  // Get the NEW meshes after rebuild - use window references
+		  const newPm = window.photoMesh || gt.photoMesh;
+		  const newPc = window.photoCoat || gt.photoCoat;
+		  const newMeshes = [];
+		  
+		  if (newPm) newMeshes.push(newPm);
+		  if (newPc) newMeshes.push(newPc);
+		  
+		  // Also get backMesh and sidesMesh from the parent group
+		  if (newPm && newPm.parent && newPm.parent.isGroup) {
+			newPm.parent.children.forEach(child => {
+			  if (child.isMesh && child.material && !newMeshes.includes(child)) {
+				newMeshes.push(child);
+			  }
 			});
 		  }
+		  
+		  console.log(`[CROSSFADE] Found ${newMeshes.length} new meshes to fade in`);
+		  
+		  // Store original states of NEW materials
+		  const newMaterialStates = new Map();
+		  newMeshes.forEach(m => {
+			if (!m) return;
+			const materials = Array.isArray(m.material) ? m.material : [m.material];
+			materials.forEach(mat => {
+			  if (mat && !newMaterialStates.has(mat)) {
+				newMaterialStates.set(mat, {
+				  transparent: mat.transparent,
+				  opacity: mat.opacity !== undefined ? mat.opacity : 1.0,
+				  depthWrite: mat.depthWrite
+				});
+			  }
+			});
+		  });
+		  
+		  // Start new meshes at opacity 0 (only for originally visible materials)
+		  newMeshes.forEach(m => {
+			if (!m) return;
+			const materials = Array.isArray(m.material) ? m.material : [m.material];
+			materials.forEach(mat => {
+			  if (!mat) return;
+			  const orig = newMaterialStates.get(mat);
+			  // Only modify materials that should be visible
+			  if (orig && orig.opacity > 0) {
+				mat.transparent = true;
+				mat.opacity = 0.0;
+				mat.needsUpdate = true;
+			  }
+			});
+		  });
+		  
+		  // === PHASE 2: FADE IN ===
+		  const startTime2 = performance.now();
+		  
+		  function fadeInStep() {
+			const elapsed = performance.now() - startTime2;
+			const t = Math.min(1.0, elapsed / halfDur);
+			
+			newMeshes.forEach(m => {
+			  if (!m) return;
+			  const materials = Array.isArray(m.material) ? m.material : [m.material];
+			  materials.forEach(mat => {
+				if (!mat) return;
+				const orig = newMaterialStates.get(mat);
+				// Only fade materials that should be visible
+				if (orig && orig.opacity > 0) {
+				  mat.opacity = orig.opacity * t;  // Fade from 0 to original opacity
+				  mat.needsUpdate = true;
+				}
+			  });
+			});
+			
+			if (t < 1.0) {
+			  requestAnimationFrame(fadeInStep);
+			} else {
+			  // === CLEANUP: Restore original material states ===
+			  newMeshes.forEach(m => {
+				if (!m) return;
+				const materials = Array.isArray(m.material) ? m.material : [m.material];
+				materials.forEach(mat => {
+				  if (!mat) return;
+				  const orig = newMaterialStates.get(mat);
+				  if (orig) {
+					mat.transparent = orig.transparent;
+					mat.opacity = orig.opacity;
+					mat.needsUpdate = true;
+				  }
+				});
+			  });
+			  
+			  globalThis.__crossfadeActive = false;
+			  
+			  // Update deck index
+			  gt.deckIndex = index;
+			  try { if (typeof deckIndex !== 'undefined') deckIndex = index; } catch(_){}
+			  
+			  // Record event for playback
+			  try {
+				if (gt.deckEvents && gt.deckEvents.armed) {
+				  gt.deckEvents.mark('to', index, dur, gt.deckIndex);
+				}
+			  } catch(_){}
+			  
+			  console.log('[CROSSFADE] === COMPLETE ===');
+			}
+		  }
+		  
+		  requestAnimationFrame(fadeInStep);
 		}
 	  }
+	  
 	  requestAnimationFrame(fadeOutStep);
-		  };  // Closes the async function gt.__deck_crossfadeTo
-		  
-		  console.log('[DIMS] Crossfade enhanced');
-		}  // Closes enhanceCrossfade function
-		
-		enhanceDeckLoader();
-		enhanceCrossfade();
+	};  // Closes the async function gt.__deck_crossfadeTo
+	
+	console.log('[DIMS] Crossfade enhanced');
+  }  // Closes enhanceCrossfade function
+  
+  enhanceDeckLoader();
+  enhanceCrossfade();
   
   console.log('[DIMS] Dimension handler ready');
 })();
@@ -7419,6 +7441,10 @@ try {
     lastX = e.clientX; lastY = e.clientY;
   }, { passive: false, capture: true });
 })();</script>
+
+
+
+
 
 
 
