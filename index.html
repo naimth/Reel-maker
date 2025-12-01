@@ -536,8 +536,8 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 		  <span class="small">Adjusts speed with distance</span>
 		</label>
 		<label>Distance Speed Power<span>
-			<input type="range" id="speedScalePower" min="0.02" max="1.0" step="0.01" value="0.020">
-			<input type="number" id="speedScalePowerN" min="0.02" max="1.0" step="0.01" value="0.020">
+			<input type="range" id="speedScalePower" min="0.02" max="1.0" step="0.01" value="0.50">
+			<input type="number" id="speedScalePowerN" min="0.02" max="1.0" step="0.01" value="0.50">
 		  </span>
 		</label>
 	  </div>
@@ -2327,6 +2327,11 @@ try { window.createOrUpdatePhotoMesh = createOrUpdatePhotoMesh; } catch(_){}
 	  camera.lookAt(pivot.position);
 	  if(fovDeg!=null){ camera.fov = fovDeg; camera.updateProjectionMatrix(); }
 	}
+	
+	// --- PASTE THESE TWO LINES HERE ---
+	window.applyRig = applyRig;
+	window.cylFromCamera = cylFromCamera;
+	
 // --- Home pose snapshot (for double-click reset) ---
 let __HOMEPOSE__ = null;
 function snapshotHome(){
@@ -2417,9 +2422,22 @@ let startX=0, startY=0; let orbitRotating=false, cylRotating=false;
 
 	// // Wheel → radial zoom with smooth inertia (preserve φ and elevation exactly)
 let __wheelZoomRAF=null, __wheelZoomVel=0, __wheelLastT=0;
+// FIX: Track whether zoom started with camera on pivot (persists across frames)
+let __wheelZoomStartedOnPivot = false;
 // Replace the entire __wheelZoomStep function around line 1258
 
 function __wheelZoomStep(t){
+	// CHECK: Did external code (like prepareForZoom) kill our velocity?
+	if (window.__wheelZoomKilled) {
+		__wheelZoomVel = 0;
+		cancelAnimationFrame(__wheelZoomRAF);
+		__wheelZoomRAF = null;
+		__wheelLastT = 0;
+		__wheelZoomStartedOnPivot = false;
+		window.__wheelZoomKilled = false;
+		return;
+	}
+	
 	if(!__wheelLastT){ __wheelLastT = t; }
 	const dt = Math.max(0, Math.min(100, t - __wheelLastT));
 	__wheelLastT = t;
@@ -2437,10 +2455,10 @@ function __wheelZoomStep(t){
 	const minD = parseFloat((minDEl && minDEl.value) || '0.01');
 	const maxD = parseFloat((maxDEl && maxDEl.value) || '100');
 
-	const wasOnPivot = (camera.parent === pivot);
+	const currentlyOnPivot = (camera.parent === pivot);
 	
 	// Only detach if actually on pivot
-	if (wasOnPivot) {
+	if (currentlyOnPivot) {
 		scene.attach(camera);
 	}
 
@@ -2454,7 +2472,7 @@ function __wheelZoomStep(t){
 		camera.position.addScaledVector(viewVector, moveDist);
 		// ✅ keep sticky-orbit’s baseline in sync with the new radius
 		// AFTER (safe)
-		if (window.__orbitLatched) { try { startVec.copy(camera.position).sub(focus); } catch(_) {} }
+		if (window.__orbitLatched || orbitRotating) { try { startVec.copy(camera.position).sub(focus); } catch(_) {} }
 
 	}
 
@@ -2466,12 +2484,12 @@ function __wheelZoomStep(t){
 		  // MOBILE FIX: Always ensure controls are enabled after zoom
 		  // This prevents the freeze issue on mobile devices
 		  try { if (controls) controls.enabled = true; } catch (_) {}
-		} else if (window.__orbitLatched) {
-		  // Desktop sticky orbit: keep controls disabled, update baseline
+		} else if (window.__orbitLatched || orbitRotating) {
+		  // Orbit is active: prime the next orbit move with a fresh baseline, don't do full cleanup
 		  try { startVec.copy(camera.position).sub(focus); } catch (_) {}
 		  try { if (controls) controls.enabled = false; } catch (_) {}
-		} else if (wasOnPivot) {
-		  // Desktop normal mode: full cleanup
+		} else if (__wheelZoomStartedOnPivot) {
+		  // Desktop normal mode: full cleanup (uses the flag from when zoom STARTED)
 		  _endAndCleanupOrbit();
 		}
 
@@ -2480,6 +2498,7 @@ function __wheelZoomStep(t){
 		__wheelZoomRAF = null;
 		__wheelLastT = 0;
 		__wheelZoomVel = 0;  // Explicitly reset velocity
+		__wheelZoomStartedOnPivot = false;  // Reset the flag
 		return;
 	}
 	__wheelZoomRAF = requestAnimationFrame(__wheelZoomStep);
@@ -2506,6 +2525,8 @@ canvas.addEventListener('wheel', (e)=>{
 	if (dir !== 0){
 	  __wheelZoomVel = Math.max(-3, Math.min(3, __wheelZoomVel + dir * 0.6));
 	  if(!__wheelZoomRAF){
+		// FIX: Capture whether camera is on pivot when zoom STARTS (even in pan/orbit mode)
+		__wheelZoomStartedOnPivot = (camera.parent === pivot);
 		// For pan/play/orbit, we do NOT detach the camera. The zoom logic will handle it.
 		__wheelZoomRAF = requestAnimationFrame(__wheelZoomStep);
 	  }
@@ -2521,6 +2542,8 @@ canvas.addEventListener('wheel', (e)=>{
   if (dir !== 0){
 	__wheelZoomVel = Math.max(-3, Math.min(3, __wheelZoomVel + dir * 0.6));
 	if (!__wheelZoomRAF){
+	  // FIX: Capture whether camera is on pivot when zoom STARTS
+	  __wheelZoomStartedOnPivot = (camera.parent === pivot);
 	  __wheelZoomRAF = requestAnimationFrame(__wheelZoomStep);
 	}
   }
@@ -3857,6 +3880,23 @@ window.addEventListener('keydown', ()=>{ try{ __cancelInertia(); }catch(_){ } },
   // Baseline refresh used by sticky-orbit + zoom
   function refreshRotateBaseline(x, y) {
 	try {
+	  // If zoom animation is still running, don't do full cleanup
+	  // Just set up orbit from current world position - they can coexist
+	  if (__wheelZoomRAF) {
+		// Ensure camera is in world space (zoom already does this)
+		if (camera.parent !== scene) {
+		  scene.attach(camera);
+		}
+		// Set up orbit baseline from current position
+		if (controls) controls.enabled = false;
+		startX = x; startY = y;
+		orbitRotating = true;
+		cylRotating = false;
+		startVec.copy(camera.position).sub(focus);
+		return;
+	  }
+	  
+	  // Normal case: no zoom active, do full cleanup
 	  _endAndCleanupOrbit();               // ensure world-space camera
 	  if (controls) controls.enabled = false;
 	  startX = x; startY = y;              // new drag anchor
@@ -4171,8 +4211,9 @@ canvas.addEventListener('pointerdown', (e)=>{
 	  const dy = e.clientY - startY;
 	  applyOrbitFromStart(dx, dy);
 
-	// If we are in latched mode, we must continuously update the reference point
-	if (window.__orbitLatched) {
+	// If we are in latched mode OR zoom is running, continuously update the reference point
+	// This prevents hyper-magnified movements when orbiting during zoom inertia
+	if (window.__orbitLatched || __wheelZoomRAF) {
 		startX = e.clientX;
 		startY = e.clientY;
 		startVec.copy(camera.position).sub(focus);
@@ -4941,7 +4982,60 @@ return;
   }
 })();
 // === end expose photo globals (fixR) ===
+// --- FORCE EXPORT CONTROLS (Gold Master) ---
+try {
+  window.pivot = pivot;
+  window.camera = camera;
+  window.scene = scene;
+  window.applyRig = applyRig;
+  window.__wheelZoomKilled = false;  // Kill flag for aborting zoom inertia
+  
+  // A dedicated function to prepare the rig for a crossfade
+  window.prepareForZoom = function() {
+	// 1. KILL INERTIA
+	// Stop the scroll loop instantly so it can't reset the pivot
+	try {
+	  window.__wheelZoomKilled = true;  // Signal to __wheelZoomStep to abort
+	  if (typeof __wheelZoomRAF !== 'undefined' && __wheelZoomRAF) {
+		cancelAnimationFrame(__wheelZoomRAF);
+		__wheelZoomRAF = null;
+	  }
+	  if (typeof __wheelZoomVel !== 'undefined') __wheelZoomVel = 0;
+	} catch(e) {}
 
+	// 2. CAPTURE WORLD TRUTH
+	// We calculate the cylindrical coordinates manually here to ensure
+	// we are reading the absolute world position of the camera.
+	const worldPos = new THREE.Vector3();
+	camera.getWorldPosition(worldPos);
+	const rel = worldPos.clone().sub(focus);
+	const phi = Math.atan2(rel.x, rel.z);
+	const r   = Math.max(0.001, Math.hypot(rel.x, rel.z));
+	const elev = rel.y;
+
+	// 3. HARD RECOUPLE
+	// Force the Pivot to match the Camera's angle, then attach the Camera.
+	pivot.position.copy(focus);
+	pivot.rotation.set(0, phi, 0);
+	pivot.updateMatrixWorld(true);
+	
+	pivot.attach(camera);
+	camera.position.set(0, elev, r);
+	camera.lookAt(pivot.position);
+	camera.updateMatrixWorld(true);
+
+	// Return the clean start values for the animation
+	return { phi, r, elev };
+  };
+
+  window.getPhotoDimensions = function() {
+	if (photoMesh && photoMesh.material && photoMesh.material.map && photoMesh.material.map.image) {
+	   return { w: photoMesh.material.map.image.width, h: photoMesh.material.map.image.height };
+	}
+	return { w: window.photoWidth || 1, h: window.photoHeight || 1 };
+  };
+  console.log('[Bridge] Gold Master Ready.');
+} catch(e) { console.error('[Bridge] Failed:', e); }
 </script>
 
 
@@ -6201,171 +6295,156 @@ function waitShaderReady(material, tries, onReady, onTimeout){
 	}
   }
 
-  // 4) Crossfade (absolute target). Accept optional durOverride.
-  function crossfadeTo(index, durOverride){
-	console.log('[deck] crossfadeTo called', {index, deckIndex, deckLen: deck.length});
-	const pm = gt.photoMesh;
-	if (!pm || !pm.material?.map) { console.warn('Load a source image first in "1) Source Image".'); return; }
-	if (index === deckIndex || !deck[index]) {
-	  console.log('[deck] Skipping - already at this index or invalid index');
-	  return;
-	}
-
-	const dur = (Number.isFinite(durOverride)
-	  ? durOverride
-	  : (parseFloat((fadeMs && fadeMs.value) || (fadeMsN && fadeMsN.value) || '900') || 900));
-	const entry = deck[index];
-	
-	console.log(`[deck] Switching from index ${deckIndex} to ${index}`);
-	console.log(`[deck] Entry texture exists:`, !!entry.texture);
-	console.log(`[deck] Entry file:`, entry.file?.name);
-
-	ensureMixPipeline(pm.material);
-
-	// Build next texture aligned to base
-	let nextTex = null;
-	try {
-	  if (entry.texture) {
-		nextTex = entry.texture;
-		console.log(`[deck] Using entry.texture directly`);
-	  }
-	  else if (entry.img) {
-		console.log(`[deck] Converting entry.img to texture (fallback)`);
-		// Legacy fallback: convert img to canvas first to avoid ImageBitmap issues
-		const baseMapRef = pm.material.map;
-		let source = entry.img;
-		
-		// If it's an ImageBitmap, convert to canvas
-		if (source && typeof createImageBitmap !== 'undefined' && source.constructor?.name === 'ImageBitmap') {
-		  const c = document.createElement('canvas');
-		  c.width = source.width;
-		  c.height = source.height;
-		  const ctx = c.getContext('2d', {alpha:false});
-		  ctx.drawImage(source, 0, 0);
-		  source = c;
-		}
-		
-		nextTex = createProperTexture(source, baseMapRef);
-		if (nextTex && baseMapRef) {
-		  mirrorTextureSettings(nextTex, baseMapRef);
-		}
-		if (nextTex && 'needsUpdate' in nextTex) nextTex.needsUpdate = true;
-	  }
-	} catch(e){
-	  console.error('[deck] Error building nextTex:', e);
-	}
-	
-	if (!nextTex) {
-	  console.warn('[deck] ⚠️  nextTex is null - this will cause problems!');
-	}
-
-	const fromIdx = deckIndex;
-
-	const startFade = (shader) => {
+  // 4) Crossfade with Auto-Zoom and Logging
+	function crossfadeTo(index, durOverride){
+	  const pm = gt.photoMesh;
+	  if (!pm || !pm.material?.map) { console.warn('Load a source image first.'); return; }
+	  if (index === deckIndex || !deck[index]) return;
+  
+	  const dur = (Number.isFinite(durOverride) ? durOverride : (parseFloat((fadeMs && fadeMs.value) || (fadeMsN && fadeMsN.value) || '900') || 900));
+	  const entry = deck[index];
+	  
+	  // --- ROBUST ZOOM LOGIC ---
+	  let doZoom = false;
+	  let startR = 0, targetR = 0, basePhi = 0, baseElev = 0;
+	  
 	  try {
-		shader.uniforms.nextMap.value = nextTex;
-		shader.uniforms.uUseNext.value = true;
-		shader.uniforms.uMix.value = 0.0;
-	  } catch(_){}
-
-	  // record absolute event
-	  try {
-		if (gt.deckEvents && gt.deckEvents.armed) gt.deckEvents.mark('to', index, dur, fromIdx);
-	  } catch(_){}
-
-	  const t0 = performance.now();
-	  function step(){
-		const t = Math.min(1, (performance.now() - t0) / dur);
-		try { shader.uniforms.uMix.value = t; } catch(_){}
-		if (t < 1) {
-		  requestAnimationFrame(step);
+		const getCyl = window.cylFromCamera || gt.cylFromCamera;
+		const getDims = window.getPhotoDimensions; // Use our new helper if available
+  
+		// 1. Determine OLD Dimensions
+		let oldW = 1, oldH = 1;
+		if (typeof getDims === 'function') {
+		   const d = getDims(); oldW = d.w; oldH = d.h;
 		} else {
-		  try {
-			applyTextureImmediate(pm, nextTex, pm.material.map);
-			shader.uniforms.uUseNext.value = false; shader.uniforms.uMix.value = 0.0; if ('needsUpdate' in pm.material) pm.material.needsUpdate = true;
-		  } catch(_){}
-		  deckIndex = index;
-		  // Update dimensions for new image
-		  updateImageDimensions(entry);
-		  try { ensureMixPipeline(pm.material); if (pm.material?.map && 'needsUpdate' in pm.material.map) pm.material.map.needsUpdate = true; } catch(_){} }
-	  }
-	  requestAnimationFrame(step);
-	};
-
-	if (!nextTex) {
-	  console.warn('[fixAF] next texture build failed — immediate swap');
-	  let swapped = false;
+		   // Fallback
+		   oldW = gt.photoWidth || 1; oldH = gt.photoHeight || 1;
+		}
+		const oldDim = Math.max(oldW, oldH);
+  
+		// 2. Determine NEW Dimensions
+		// Try entry properties first, then the texture image itself
+		const newW = entry.width || (entry.texture?.image?.width) || (entry.img?.width);
+		const newH = entry.height || (entry.texture?.image?.height) || (entry.img?.height);
+		const newDim = (newW && newH) ? Math.max(newW, newH) : 0;
+  
+		// 3. Calculate Zoom
+		if (oldDim > 0 && newDim > 0 && typeof getCyl === 'function') {
+		  const ratio = newDim / oldDim; 
+		  
+		  // Only zoom if difference is > 1%
+		  if (Math.abs(1.0 - ratio) > 0.01) {
+			const c = getCyl(); 
+			startR = c.r; 
+			basePhi = c.phi; 
+			baseElev = c.elev;
+			targetR = startR * ratio; // Proportional Distance
+  
+			// Clamp
+			const minD = parseFloat(document.getElementById('minDist')?.value || 0.1);
+			const maxD = parseFloat(document.getElementById('maxDist')?.value || 50);
+			targetR = Math.max(minD, Math.min(maxD, targetR));
+  
+			doZoom = true;
+			console.log(`[Zoom] Active! ${oldDim}px -> ${newDim}px (x${ratio.toFixed(2)}). Dist: ${startR.toFixed(2)} -> ${targetR.toFixed(2)}`);
+		  } else {
+			console.log(`[Zoom] Skipped. Sizes match (${oldDim} vs ${newDim})`);
+		  }
+		} else {
+		  console.log('[Zoom] Skipped. Missing data:', { oldDim, newDim, hasCylFn: typeof getCyl==='function' });
+		}
+	  } catch(e) { console.warn('[Zoom] Error:', e); }
+	  // -----------------------
+  
+	  ensureMixPipeline(pm.material);
+  
+	  // Build next texture
+	  let nextTex = null;
 	  try {
-		if (entry.texture) { swapped = applyTextureImmediate(pm, entry.texture, pm.material.map); }
+		if (entry.texture) nextTex = entry.texture;
 		else if (entry.img) {
 		  const baseMapRef = pm.material.map;
-		  
-		  // Convert img to canvas if it's an ImageBitmap
 		  let source = entry.img;
 		  if (source && typeof createImageBitmap !== 'undefined' && source.constructor?.name === 'ImageBitmap') {
-		    const c = document.createElement('canvas');
-		    c.width = source.width;
-		    c.height = source.height;
-		    const ctx = c.getContext('2d', {alpha:false});
-		    ctx.drawImage(source, 0, 0);
-		    source = c;
+			const c = document.createElement('canvas');
+			c.width = source.width; c.height = source.height;
+			const ctx = c.getContext('2d', {alpha:false});
+			ctx.drawImage(source, 0, 0);
+			source = c;
 		  }
+		  nextTex = createProperTexture(source, baseMapRef);
+		  if (nextTex && baseMapRef) mirrorTextureSettings(nextTex, baseMapRef);
+		  if (nextTex && 'needsUpdate' in nextTex) nextTex.needsUpdate = true;
+		}
+	  } catch(e){ console.error('[deck] Error building nextTex:', e); }
+  
+	  const fromIdx = deckIndex;
+	  const startFade = (shader) => {
+		try {
+		  shader.uniforms.nextMap.value = nextTex;
+		  shader.uniforms.uUseNext.value = true;
+		  shader.uniforms.uMix.value = 0.0;
+		} catch(_){}
+  
+		try { if (gt.deckEvents && gt.deckEvents.armed) gt.deckEvents.mark('to', index, dur, fromIdx); } catch(_){}
+  
+		const t0 = performance.now();
+		function step(){
+		  const now = performance.now();
+		  const rawT = (now - t0) / dur;
+		  const t = Math.min(1, rawT);
 		  
-		  const tex = createProperTexture(source, baseMapRef);
-		  if (tex) {
-		    if (baseMapRef) mirrorTextureSettings(tex, baseMapRef);
-		    swapped = applyTextureImmediate(pm, tex, baseMapRef);
+		  try { shader.uniforms.uMix.value = t; } catch(_){}
+  
+		  // --- EXECUTE ZOOM ---
+		  if (doZoom && t <= 1.0) {
+			 const setRig = window.applyRig || gt.applyRig;
+			 if (typeof setRig === 'function') {
+			   // Ease-in-out
+			   const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+			   const curR = startR + (targetR - startR) * ease;
+			   setRig(basePhi, curR, baseElev);
+			 }
+		  }
+		  // --------------------
+  
+		  if (t < 1) {
+			requestAnimationFrame(step);
+		  } else {
+			try {
+			  applyTextureImmediate(pm, nextTex, pm.material.map);
+			  shader.uniforms.uUseNext.value = false; shader.uniforms.uMix.value = 0.0; if ('needsUpdate' in pm.material) pm.material.needsUpdate = true;
+			} catch(_){}
+			deckIndex = index;
+			updateImageDimensions(entry);
+			try { ensureMixPipeline(pm.material); if (pm.material?.map && 'needsUpdate' in pm.material.map) pm.material.map.needsUpdate = true; } catch(_){} 
 		  }
 		}
-	  } catch(_){}
-	  if (!swapped && entry.file && 'createImageBitmap' in window) {
-		// async rehydrate from file
-		createImageBitmap(entry.file).then((bmp)=>{
-		  try {
-			const baseMapRef = pm.material.map;
-			
-			// Convert ImageBitmap to canvas to avoid serialization issues
-			const c = document.createElement('canvas');
-			c.width = bmp.width;
-			c.height = bmp.height;
-			const ctx = c.getContext('2d', {alpha:false});
-			ctx.drawImage(bmp, 0, 0);
-			
-			const tex = createProperTexture(c, baseMapRef);
-			if (tex) {
-			  if (baseMapRef) mirrorTextureSettings(tex, baseMapRef);
-			  applyTextureImmediate(pm, tex, baseMapRef);
-			}
-		  } catch(_){}
+		requestAnimationFrame(step);
+	  };
+  
+	  if (!nextTex) {
+		// Fallback: Immediate swap
+		let swapped = false;
+		try { if (entry.texture) swapped = applyTextureImmediate(pm, entry.texture, pm.material.map); } catch(_){}
+		deckIndex = index;
+		updateImageDimensions(entry);
+		try { ensureMixPipeline(pm.material); if (pm.material?.map && 'needsUpdate' in pm.material.map) pm.material.map.needsUpdate = true; } catch(_){}
+		return;
+	  }
+  
+	  if (!setNextTexture(pm.material, nextTex)) {
+		return waitShaderReady(pm.material, 16, (sh) => startFade(sh), () => {
+		   try { applyTextureImmediate(pm, nextTex, pm.material.map); } catch(_) {}
+		   deckIndex = index;
+		   updateImageDimensions(entry);
+		   try { ensureMixPipeline(pm.material); if (pm.material?.map && 'needsUpdate' in pm.material.map) pm.material.map.needsUpdate = true; } catch(_){} 
 		});
 	  }
-	  deckIndex = index;
-	  // Update dimensions for new image
-	  updateImageDimensions(entry);
-	  try { ensureMixPipeline(pm.material); if (pm.material?.map && 'needsUpdate' in pm.material.map) pm.material.map.needsUpdate = true; } catch(_){}
-	  return;
+  
+	  const sh = pm.material.userData.shader;
+	  startFade(sh);
 	}
-
-	// If shader not ready yet, wait a few frames
-	if (!setNextTexture(pm.material, nextTex)) {
-	  return waitShaderReady(pm.material, 16,
-		(sh) => startFade(sh),
-		() => {
-		  console.warn('[fixAF] shader not ready after wait — immediate swap');
-		  try {
-			applyTextureImmediate(pm, nextTex, pm.material.map);
-		  } catch(_) {}
-		  deckIndex = index;
-		  // Update dimensions for new image
-		  updateImageDimensions(entry);
-		  try { ensureMixPipeline(pm.material); if (pm.material?.map && 'needsUpdate' in pm.material.map) pm.material.map.needsUpdate = true; } catch(_){} }
-	  );
-	}
-
-	// Shader ready; grab and go
-	const sh = pm.material.userData.shader;
-	startFade(sh);
-  }
   
   function crossfadePrev(){ if (deck.length>1) gt.__deck_crossfadeTo((deckIndex - 1 + deck.length) % deck.length); }
   function crossfadeNext(){ if (deck.length>1) gt.__deck_crossfadeTo((deckIndex + 1) % deck.length); }
@@ -6583,34 +6662,74 @@ console.log('[DIMS] Script loading...');
 	}
 	
 	gt.__deck_crossfadeTo = async function(index, durOverride) {
-	  console.log('[CROSSFADE] === START ===');
-	  console.log('[CROSSFADE] Target index:', index);
+	  console.log('[CROSSFADE] === START (Gold Master) ===');
 	  
 	  const deck = gt.deck || [];
 	  const entry = deck[index];
+	  if (!entry) return;
+	
+	  // --- ZOOM SETUP ---
+	  let doZoom = false;
+	  let startR = 0, targetR = 0, basePhi = 0, baseElev = 0;
 	  
-	  if (!entry) {
-		console.error('[CROSSFADE] No entry at index', index);
-		return;
-	  }
+	  try {
+		// 1. PREPARE RIG
+		// Call our new Bridge function. It stops inertia, recouples the camera,
+		// and returns the clean starting coordinates.
+		if (window.prepareForZoom) {
+			const c = window.prepareForZoom();
+			startR = c.r;
+			basePhi = c.phi;
+			baseElev = c.elev;
+		} else {
+			// Fallback (should not happen with correct bridge)
+			console.warn('[Zoom] Bridge missing, using fallback');
+			if (window.cylFromCamera) { const c = window.cylFromCamera(); startR = c.r; basePhi = c.phi; baseElev = c.elev; }
+		}
+	
+		// 2. Calculate Target
+		const oldW = gt.photoWidth || 1; 
+		const oldH = gt.photoHeight || 1;
+		const oldDim = Math.max(oldW, oldH);
+	
+		let newW = entry.width;
+		let newH = entry.height;
+		if (!newW || !newH) {
+		   if (entry.texture && entry.texture.image) { newW = entry.texture.image.width; newH = entry.texture.image.height; }
+		   else if (entry.img) { newW = entry.img.width; newH = entry.img.height; }
+		}
+		const newDim = (newW && newH) ? Math.max(newW, newH) : 0;
+	
+		if (oldDim > 0 && newDim > 0 && startR > 0) {
+		   const ratio = newDim / oldDim;
+		   if (Math.abs(1.0 - ratio) > 0.01) {
+			 targetR = startR * ratio;
+			 
+			 const minD = parseFloat(document.getElementById('minDist')?.value || 0.1);
+			 const maxD = parseFloat(document.getElementById('maxDist')?.value || 50);
+			 targetR = Math.max(minD, Math.min(maxD, targetR));
+			 
+			 doZoom = true;
+			 console.log(`[Zoom] x${ratio.toFixed(2)} | phi:${basePhi.toFixed(3)}`);
+		   }
+		}
+	  } catch(e) { console.warn('[Zoom] Error:', e); }
+	  // ------------------
 	  
-	  // Load texture on-demand if missing
+	  // Load texture on-demand
 	  if (!entry.texture && entry.file) {
-		console.log('[CROSSFADE] Loading texture on-demand...');
 		try {
 		  const bmp = await createImageBitmap(entry.file);
 		  const c = document.createElement('canvas');
-		  c.width = bmp.width;
-		  c.height = bmp.height;
+		  c.width = bmp.width; c.height = bmp.height;
 		  const ctx = c.getContext('2d', {alpha:false});
 		  ctx.drawImage(bmp, 0, 0);
 		  
 		  const baseMap = gt.photoMesh?.material?.map;
 		  const createProperTextureFn = gt.createProperTexture || window.createProperTexture || globalThis.createProperTexture;
 		  
-		  if (createProperTextureFn) {
-			entry.texture = createProperTextureFn(c, baseMap);
-		  } else {
+		  if (createProperTextureFn) entry.texture = createProperTextureFn(c, baseMap);
+		  else {
 			const TexCtor = (baseMap && baseMap.constructor) ? baseMap.constructor : (gt.THREE && gt.THREE.Texture);
 			if (TexCtor) {
 			  entry.texture = new TexCtor(c);
@@ -6619,20 +6738,11 @@ console.log('[DIMS] Script loading...');
 			  entry.texture.needsUpdate = true;
 			}
 		  }
-		  
-		  if (entry.texture && baseMap && typeof mirrorTextureSettings === 'function') {
-			mirrorTextureSettings(entry.texture, baseMap);
-		  }
-		  
-		  if (entry.texture) {
-			entry.texture.needsUpdate = true;
-		  }
-		} catch (err) {
-		  console.error('[CROSSFADE] Failed to load texture:', err);
-		}
+		  if (entry.texture && baseMap && typeof mirrorTextureSettings === 'function') mirrorTextureSettings(entry.texture, baseMap);
+		  if (entry.texture) entry.texture.needsUpdate = true;
+		} catch (err) { console.error(err); }
 	  }
 	  
-	  // Recover dimensions from texture if missing
 	  if (!entry.width || !entry.height) {
 		if (entry.texture?.image) {
 		  entry.width = entry.texture.image.width;
@@ -6645,80 +6755,63 @@ console.log('[DIMS] Script loading...');
 	  const prevHeight = gt.photoHeight;
 	  const dimsChanged = (prevWidth !== entry.width) || (prevHeight !== entry.height);
 	  
-	  const dur = Number.isFinite(durOverride) 
-		? durOverride 
-		: (parseFloat(document.getElementById('fadeMs')?.value || '900') || 900);
-	  
-	  console.log('[CROSSFADE] Duration:', dur, 'dimsChanged:', dimsChanged);
-	  
-	  // Get all meshes - use window references which are kept in sync
+	  const dur = Number.isFinite(durOverride) ? durOverride : (parseFloat(document.getElementById('fadeMs')?.value || '900') || 900);
 	  const pm = window.photoMesh || gt.photoMesh;
-	  if (!pm) {
-		console.error('[CROSSFADE] No photoMesh found!');
-		return;
-	  }
+	  if (!pm) return;
 	  
-	  // Collect all meshes - photoMesh and photoCoat are the main ones that need fading
-	  // backMesh and sidesMesh are in the same parent group
 	  const allMeshes = [];
-	  
-	  // Add photoMesh and photoCoat (rendered separately at the end)
 	  if (pm) allMeshes.push(pm);
 	  const pc = window.photoCoat || gt.photoCoat;
 	  if (pc) allMeshes.push(pc);
-	  
-	  // Also get backMesh and sidesMesh from the parent group
 	  if (pm.parent && pm.parent.isGroup) {
 		pm.parent.children.forEach(child => {
-		  if (child.isMesh && child.material && !allMeshes.includes(child)) {
-			allMeshes.push(child);
-		  }
+		  if (child.isMesh && child.material && !allMeshes.includes(child)) allMeshes.push(child);
 		});
 	  }
 	  
-	  console.log(`[CROSSFADE] Found ${allMeshes.length} meshes to fade:`, allMeshes.map(m => m.uuid.slice(0,8)));
-	  
-	  // Store original material states so we can restore them properly
-	  // (some materials like the invisible front/back of sidesMesh need to stay transparent)
 	  const originalMaterialStates = new Map();
 	  allMeshes.forEach(m => {
 		if (!m) return;
 		const materials = Array.isArray(m.material) ? m.material : [m.material];
 		materials.forEach(mat => {
 		  if (mat && !originalMaterialStates.has(mat)) {
-			originalMaterialStates.set(mat, {
-			  transparent: mat.transparent,
-			  opacity: mat.opacity !== undefined ? mat.opacity : 1.0,
-			  depthWrite: mat.depthWrite
-			});
+			originalMaterialStates.set(mat, { transparent: mat.transparent, opacity: mat.opacity !== undefined ? mat.opacity : 1.0, depthWrite: mat.depthWrite });
 		  }
 		});
 	  });
 	  
-	  // Prevent render loop from interfering
 	  globalThis.__crossfadeActive = true;
-	  
 	  const halfDur = dur / 2;
-	  
-	  // === PHASE 1: FADE OUT ===
 	  const startTime1 = performance.now();
 	  
 	  function fadeOutStep() {
 		const elapsed = performance.now() - startTime1;
 		const t = Math.min(1.0, elapsed / halfDur);
-		const opacity = 1.0 - t;
+		const totalT = Math.min(1.0, elapsed / dur);
+	
+		// --- EXECUTE ZOOM ---
+		if (doZoom && totalT <= 1.0) {
+			try {
+				const setRig = window.applyRig || gt.applyRig;
+				if (typeof setRig === 'function') {
+					const zoomT = Math.min(1, elapsed / dur);
+					const ease = zoomT < 0.5 ? 2 * zoomT * zoomT : -1 + (4 - 2 * zoomT) * zoomT;
+					const curR = startR + (targetR - startR) * ease;
+					setRig(basePhi, curR, baseElev);
+				}
+			} catch(_){}
+		}
+		// --------------------
 		
 		allMeshes.forEach(m => {
 		  if (!m) return;
-		  // Handle both single materials and material arrays
 		  const materials = Array.isArray(m.material) ? m.material : [m.material];
 		  materials.forEach(mat => {
 			if (!mat) return;
 			const orig = originalMaterialStates.get(mat);
-			// Only fade materials that were originally visible
 			if (orig && orig.opacity > 0) {
 			  mat.transparent = true;
-			  mat.opacity = orig.opacity * (1 - t);  // Fade from original opacity to 0
+			  mat.opacity = orig.opacity * (1 - t);
 			  mat.needsUpdate = true;
 			}
 		  });
@@ -6727,82 +6820,71 @@ console.log('[DIMS] Script loading...');
 		if (t < 1.0) {
 		  requestAnimationFrame(fadeOutStep);
 		} else {
-		  // === MIDPOINT: SWAP/REBUILD ===
-		  console.log('[CROSSFADE] Fade-out complete, rebuilding...');
-		  
-		  // Update global dimensions
 		  if (entry.width && entry.height) {
 			gt.photoWidth = entry.width;
 			gt.photoHeight = entry.height;
 			gt.photoAspect = entry.aspect || (entry.width / entry.height);
 		  }
-		  
-		  // Set the new texture
 		  if (entry.texture) {
 			gt.photoTex = entry.texture;
 			window.photoTex = entry.texture;
 		  }
 		  
-		  // Rebuild mesh if dimensions changed, otherwise just swap texture
 		  if (dimsChanged && typeof gt.createOrUpdatePhotoMesh === 'function') {
 			gt.createOrUpdatePhotoMesh();
 		  } else {
-			// Same dimensions - just swap the texture
 			try {
 			  const currentPm = gt.photoMesh;
 			  if (currentPm && currentPm.material && entry.texture) {
-				if (typeof mirrorTextureSettings === 'function' && currentPm.material.map) {
-				  mirrorTextureSettings(entry.texture, currentPm.material.map);
-				}
+				if (typeof mirrorTextureSettings === 'function' && currentPm.material.map) mirrorTextureSettings(entry.texture, currentPm.material.map);
 				currentPm.material.map = entry.texture;
 				currentPm.material.needsUpdate = true;
 			  }
 			} catch(_){}
 		  }
+	
+		  // RE-ASSERT RIG STATE
+		  // Just in case createOrUpdatePhotoMesh touched something
+		  if (doZoom && window.prepareForZoom) {
+			 try {
+				const setRig = window.applyRig || gt.applyRig;
+				if (typeof setRig === 'function') {
+					const midT = 0.5;
+					const ease = midT < 0.5 ? 2 * midT * midT : -1 + (4 - 2 * midT) * midT;
+					const midR = startR + (targetR - startR) * ease;
+					setRig(basePhi, midR, baseElev);
+				}
+			 } catch(e) {}
+		  }
 		  
-		  // Get the NEW meshes after rebuild - use window references
 		  const newPm = window.photoMesh || gt.photoMesh;
 		  const newPc = window.photoCoat || gt.photoCoat;
 		  const newMeshes = [];
-		  
 		  if (newPm) newMeshes.push(newPm);
 		  if (newPc) newMeshes.push(newPc);
-		  
-		  // Also get backMesh and sidesMesh from the parent group
 		  if (newPm && newPm.parent && newPm.parent.isGroup) {
 			newPm.parent.children.forEach(child => {
-			  if (child.isMesh && child.material && !newMeshes.includes(child)) {
-				newMeshes.push(child);
-			  }
+			  if (child.isMesh && child.material && !newMeshes.includes(child)) newMeshes.push(child);
 			});
 		  }
 		  
-		  console.log(`[CROSSFADE] Found ${newMeshes.length} new meshes to fade in`);
-		  
-		  // Store original states of NEW materials
 		  const newMaterialStates = new Map();
 		  newMeshes.forEach(m => {
 			if (!m) return;
 			const materials = Array.isArray(m.material) ? m.material : [m.material];
 			materials.forEach(mat => {
 			  if (mat && !newMaterialStates.has(mat)) {
-				newMaterialStates.set(mat, {
-				  transparent: mat.transparent,
-				  opacity: mat.opacity !== undefined ? mat.opacity : 1.0,
-				  depthWrite: mat.depthWrite
-				});
+				newMaterialStates.set(mat, { transparent: mat.transparent, opacity: mat.opacity !== undefined ? mat.opacity : 1.0, depthWrite: mat.depthWrite });
 			  }
 			});
 		  });
 		  
-		  // Start new meshes at opacity 0 (only for originally visible materials)
 		  newMeshes.forEach(m => {
 			if (!m) return;
 			const materials = Array.isArray(m.material) ? m.material : [m.material];
 			materials.forEach(mat => {
 			  if (!mat) return;
 			  const orig = newMaterialStates.get(mat);
-			  // Only modify materials that should be visible
 			  if (orig && orig.opacity > 0) {
 				mat.transparent = true;
 				mat.opacity = 0.0;
@@ -6811,12 +6893,24 @@ console.log('[DIMS] Script loading...');
 			});
 		  });
 		  
-		  // === PHASE 2: FADE IN ===
 		  const startTime2 = performance.now();
-		  
 		  function fadeInStep() {
 			const elapsed = performance.now() - startTime2;
 			const t = Math.min(1.0, elapsed / halfDur);
+			const totalElapsed = (performance.now() - startTime1);
+	
+			// --- ZOOM PART 2 ---
+			if (doZoom) {
+				try {
+					const setRig = window.applyRig || gt.applyRig;
+					if (typeof setRig === 'function') {
+						const zoomT = Math.min(1, totalElapsed / dur);
+						const ease = zoomT < 0.5 ? 2 * zoomT * zoomT : -1 + (4 - 2 * zoomT) * zoomT;
+						const curR = startR + (targetR - startR) * ease;
+						setRig(basePhi, curR, baseElev);
+					}
+				} catch(_){}
+			}
 			
 			newMeshes.forEach(m => {
 			  if (!m) return;
@@ -6824,9 +6918,8 @@ console.log('[DIMS] Script loading...');
 			  materials.forEach(mat => {
 				if (!mat) return;
 				const orig = newMaterialStates.get(mat);
-				// Only fade materials that should be visible
 				if (orig && orig.opacity > 0) {
-				  mat.opacity = orig.opacity * t;  // Fade from 0 to original opacity
+				  mat.opacity = orig.opacity * t;
 				  mat.needsUpdate = true;
 				}
 			  });
@@ -6835,7 +6928,6 @@ console.log('[DIMS] Script loading...');
 			if (t < 1.0) {
 			  requestAnimationFrame(fadeInStep);
 			} else {
-			  // === CLEANUP: Restore original material states ===
 			  newMeshes.forEach(m => {
 				if (!m) return;
 				const materials = Array.isArray(m.material) ? m.material : [m.material];
@@ -6849,30 +6941,17 @@ console.log('[DIMS] Script loading...');
 				  }
 				});
 			  });
-			  
 			  globalThis.__crossfadeActive = false;
-			  
-			  // Update deck index
 			  gt.deckIndex = index;
 			  try { if (typeof deckIndex !== 'undefined') deckIndex = index; } catch(_){}
-			  
-			  // Record event for playback
-			  try {
-				if (gt.deckEvents && gt.deckEvents.armed) {
-				  gt.deckEvents.mark('to', index, dur, gt.deckIndex);
-				}
-			  } catch(_){}
-			  
-			  console.log('[CROSSFADE] === COMPLETE ===');
+			  try { if (gt.deckEvents && gt.deckEvents.armed) gt.deckEvents.mark('to', index, dur, gt.deckIndex); } catch(_){}
 			}
 		  }
-		  
 		  requestAnimationFrame(fadeInStep);
 		}
 	  }
-	  
 	  requestAnimationFrame(fadeOutStep);
-	};  // Closes the async function gt.__deck_crossfadeTo
+	};
 	
 	console.log('[DIMS] Crossfade enhanced');
   }  // Closes enhanceCrossfade function
@@ -7441,10 +7520,6 @@ console.log('[DIMS] Script loading...');
     lastX = e.clientX; lastY = e.clientY;
   }, { passive: false, capture: true });
 })();</script>
-
-
-
-
 
 
 
