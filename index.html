@@ -3381,11 +3381,12 @@ function __dirSQUADT(u0, u1, u2, u3, t, tau){
 // Sample directly between discrete checkpoints with smooth per-DOF easing.
 // This avoids direction snaps and ensures velocity AND acceleration near 0 at endpoints.
 
+
 function sampleCustomPathAt(globalProgress, easeStrength){
   function segSharpness(prev, A, B, next){
     // Use offset vectors to measure turn angle at B
     const v1 = B.offset.clone().sub(A.offset);
-    const v2 = (next? next.offset.clone().sub(B.offset): new THREE.Vector3()).normalize();
+    const v2 = (next ? next.offset.clone().sub(B.offset) : new THREE.Vector3()).normalize();
     if (v1.lengthSq() === 0) return 0;
     const n1 = v1.clone().normalize();
     const dot = THREE.MathUtils.clamp(n1.dot(v2), -1, 1);
@@ -3393,184 +3394,181 @@ function sampleCustomPathAt(globalProgress, easeStrength){
   }
 
   const cps = Array.isArray(cinematicPathCheckpoints) ? cinematicPathCheckpoints : null;
-  if (!(cps && cps.length >= 2)){
-    // Fallback to existing curves if checkpoints are missing
+
+  // If we don't have a proper checkpoint path, just sample existing curves directly.
+  if (!(cps && cps.length >= 2)) {
     const focus = pathFocusCurve ? pathFocusCurve.getPointAt(globalProgress) : new THREE.Vector3();
-    const offset = pathOffsetCurve ? pathOffsetCurve.getPointAt(globalProgress) : new THREE.Vector3(0,0,2);
-    const fov = pathFovCurve ? pathFovCurve.getPointAt(globalProgress).y : camera.fov;
+    const offset = pathOffsetCurve ? pathOffsetCurve.getPointAt(globalProgress) : new THREE.Vector3(0, 0, 2);
+    const fovPt = pathFovCurve ? pathFovCurve.getPointAt(globalProgress) : new THREE.Vector2(globalProgress, 50);
+    const fov = (fovPt && typeof fovPt.y === 'number') ? fovPt.y : 50;
     return { focus, offset, fov };
   }
+
+  // Map global progress into a segment index and local parameter u in [0,1].
   const n = cps.length - 1;
-const f = THREE.MathUtils.clamp(globalProgress, 0, 1) * n;
-const i = Math.min(n-1, Math.floor(f));
-const u = f - i;
-let alphaSeg = easeStrength;
-const A = cps[i], B = cps[i+1];
-const prev = (i>0)? cps[i-1] : null;
-const next = (i+2 <= n)? cps[i+2] : null;
-const sharp = segSharpness(prev, A, B, next);
-// Feathered progress across the whole segment
-const s = __featheredProgress(u, alphaSeg, sharp);
+  const gp = THREE.MathUtils.clamp(globalProgress, 0, 1);
+  const f = gp * n;
+  const i = Math.min(n - 1, Math.floor(f));
+  const u = f - i;
 
+  const A = cps[i];
+  const B = cps[Math.min(i + 1, n)];
+  const prev = (i > 0) ? cps[i - 1] : null;
+  const next = (i < n - 1) ? cps[i + 2] : null;
 
-const focus = A.focus.clone().lerp(B.focus, s);
+  let focus, offset, fov;
 
-// --- Orbit direction interpolation (mode: arc|cubic) ---
-const mode = (typeof document!=='undefined' && document.getElementById('orbitSmooth')) ? document.getElementById('orbitSmooth').value : 'arc';
-const eps = 1e-6;
-const rA = A.offset.length();
-const rB = B.offset.length();
-let uA = (rA > eps) ? A.offset.clone().multiplyScalar(1.0 / rA) : new THREE.Vector3(0,0,1);
-let uB = (rB > eps) ? B.offset.clone().multiplyScalar(1.0 / rB) : new THREE.Vector3(0,0,1);
+  // Use feathered progress (if available) purely as a time-warp along the Catmull curves.
+  if (typeof __featheredProgress === 'function') {
+    const sharp = segSharpness(prev || A, A, B, next || B);
+    const baseAlpha = THREE.MathUtils.clamp(easeStrength || 0, 0, 10);
+    const alphaSeg = baseAlpha;
+    const s = __featheredProgress(u, alphaSeg, sharp);
+    const t = (i + THREE.MathUtils.clamp(s, 0, 1)) / n;
 
-// Hemisphere align for short-path interpolation
-let uBAligned = uB.clone();
-let dotAB = THREE.MathUtils.clamp(uA.dot(uBAligned), -1, 1);
-if (dotAB < 0) { uBAligned.multiplyScalar(-1); dotAB = -dotAB; }
+    if (pathFocusCurve && typeof pathFocusCurve.getPointAt === 'function' &&
+        pathOffsetCurve && typeof pathOffsetCurve.getPointAt === 'function' &&
+        pathFovCurve && typeof pathFovCurve.getPointAt === 'function') {
 
-let dir;
-if (mode === 'cubic' && prev && next) {
-  // Use SQUAD with hemisphere alignment (no extra guards/clamps)
-  const u0 = prev.offset.clone().normalize();
-  const u1 = uA.clone();
-  const u2 = uBAligned.clone();
-  const u3 = next.offset.clone().normalize();
-  if (typeof __dirSQUAD === 'function') {
-    dir = __dirSQUAD(u0,u1,u2,u3,s);
-  } else {
-    // Fallback to SLERP if helpers missing
-    const theta = Math.acos(THREE.MathUtils.clamp(uA.dot(uBAligned), -1, 1));
-    if (theta < 1e-5) { dir = uA.clone(); }
-    else {
-      const sinT = Math.sin(theta);
-      const w1 = Math.sin((1 - s) * theta) / sinT;
-      const w2 = Math.sin(s * theta) / sinT;
-      dir = uA.clone().multiplyScalar(w1).add(uBAligned.clone().multiplyScalar(w2)).normalize();
-    }
-  }
-} else {
-  // Stable arc (SLERP) between segment endpoints
-  const theta = Math.acos(THREE.MathUtils.clamp(uA.dot(uBAligned), -1, 1));
-  if (theta < 1e-5) { dir = uA.clone(); }
-  else {
-    const sinT = Math.sin(theta);
-    const w1 = Math.sin((1 - s) * theta) / sinT;
-    const w2 = Math.sin(s * theta) / sinT;
-    dir = uA.clone().multiplyScalar(w1).add(uBAligned.clone().multiplyScalar(w2)).normalize();
-  }
-}
-
-// Smooth radius
-const r = THREE.MathUtils.lerp(rA, rB, s);
-const offset = dir.multiplyScalar(r);
-
-const fov = THREE.MathUtils.lerp(A.fov, B.fov, s);
-
-// --- Butter Smoothing (critically-damped pose filter) ---
-let outFocus = focus, outOffset = offset, outFov = fov;
-try{
-  const bs = (typeof document!=='undefined') ? document.getElementById('butterSmooth') : null;
-  const msEl = (typeof document!=='undefined') ? document.getElementById('butterMs') : null;
-  const enabled = !!(bs && bs.checked);
-  const ms = msEl ? Math.max(0, parseFloat(msEl.value||'800')) : 800;
-  if (enabled && ms > 0) {
-    window.__butterState = window.__butterState || { 
-      has:false, lastP:-1, t:0, 
-      focus:new THREE.Vector3(), dir:new THREE.Vector3(0,0,1), rad:0, fov:0,
-      // Second-order state for velocity smoothing
-      focusVel:new THREE.Vector3(), dirVel:new THREE.Vector3(), radVel:0, fovVel:0
-    };
-    if (__butterState.lastP > globalProgress) { __butterState.has = false; } // reset on loop/restart
-    __butterState.lastP = globalProgress;
-    const now = (typeof performance!=='undefined' ? performance.now()*0.001 : Date.now()*0.001);
-    const prevT = __butterState.t || now;
-    __butterState.t = now;
-    const dt = Math.min(1/15, Math.max(0.00001, now - prevT)); // cap for stability
-    const tau = Math.max(0.001, ms / 1000);
-    
-    // Use a second-order critically damped filter for even smoother motion
-    // This smooths both position AND velocity
-    const zeta = 1.0; // critically damped
-    const omega = 1.0 / tau;
-    const k1 = zeta / (Math.PI * omega);
-    const k2 = 1.0 / ((2 * Math.PI * omega) * (2 * Math.PI * omega));
-    const k3 = zeta * omega;
-    
-    // Simplified second-order response (critically damped)
-    const alpha = Math.min(1.0, dt * omega * 2.0); // Doubled responsiveness for smoother tracking
-
-    if (!__butterState.has) {
-      __butterState.focus.copy(focus);
-      __butterState.dir.copy(offset.clone().normalize());
-      __butterState.rad = offset.length();
-      __butterState.fov = fov;
-      __butterState.focusVel.set(0,0,0);
-      __butterState.dirVel.set(0,0,0);
-      __butterState.radVel = 0;
-      __butterState.fovVel = 0;
-      __butterState.has = true;
+      focus  = pathFocusCurve.getPointAt(t);
+      offset = pathOffsetCurve.getPointAt(t);
+      const fovPt = pathFovCurve.getPointAt(t);
+      fov = (fovPt && typeof fovPt.y === 'number')
+        ? fovPt.y
+        : (typeof B.fov === 'number' ? B.fov : 50);
     } else {
-      // Blend direction on the sphere (unit vectors) — short path
-      const a = __butterState.dir.clone().normalize();
-      let b = offset.clone().normalize();
-      let d = THREE.MathUtils.clamp(a.dot(b), -1, 1);
-      if (d < 0) { b.multiplyScalar(-1); d = -d; }
-      const th = Math.acos(d);
-      let blended;
-      if (th < 1e-5){ blended = a; }
-      else {
-        const sinT = Math.sin(th);
-        const w1 = Math.sin((1 - alpha) * th) / sinT;
-        const w2 = Math.sin(alpha * th) / sinT;
-        blended = a.multiplyScalar(w1).add(b.multiplyScalar(w2)).normalize();
-      }
-
-      __butterState.dir.copy(blended);
-      __butterState.rad += (offset.length() - __butterState.rad) * alpha;
-      __butterState.focus.lerp(focus, alpha);
-      __butterState.fov += (fov - __butterState.fov) * alpha;
+      // Fallback: lerp directly between checkpoints A and B.
+      focus  = A.focus.clone().lerp(B.focus, s);
+      offset = A.offset.clone().lerp(B.offset, s);
+      fov    = THREE.MathUtils.lerp(A.fov, B.fov, s);
     }
+  } else {
+    // No feathered progress helper: simple linear mapping within the segment.
+    const s = THREE.MathUtils.clamp(u, 0, 1);
+    const t = (i + s) / n;
 
-    outFocus = __butterState.focus.clone();
-    outOffset = __butterState.dir.clone().multiplyScalar(__butterState.rad);
-    outFov = __butterState.fov;
-    
-    // Triple-Pass Super Smoothing: Apply additional smoothing passes
-    const superEl = (typeof document!=='undefined') ? document.getElementById('superSmooth') : null;
-    if (superEl && superEl.checked && ms > 100) {
-      // Apply two more exponential smoothing passes with reduced time constants
-      // This creates an even smoother S-curve response
-      window.__butterState2 = window.__butterState2 || {
-        focus: outFocus.clone(), offset: outOffset.clone(), fov: outFov
-      };
-      window.__butterState3 = window.__butterState3 || {
-        focus: outFocus.clone(), offset: outOffset.clone(), fov: outFov
-      };
-      
-      // Second pass (50% of main time constant)
-      const alpha2 = Math.min(1.0, dt * omega * 1.0);
-      __butterState2.focus.lerp(outFocus, alpha2);
-      __butterState2.offset.lerp(outOffset, alpha2);
-      __butterState2.fov += (outFov - __butterState2.fov) * alpha2;
-      
-      // Third pass (33% of main time constant)  
-      const alpha3 = Math.min(1.0, dt * omega * 0.67);
-      __butterState3.focus.lerp(__butterState2.focus, alpha3);
-      __butterState3.offset.lerp(__butterState2.offset, alpha3);
-      __butterState3.fov += (__butterState2.fov - __butterState3.fov) * alpha3;
-      
-      // Use the triple-smoothed result
-      outFocus = __butterState3.focus.clone();
-      outOffset = __butterState3.offset.clone();
-      outFov = __butterState3.fov;
+    if (pathFocusCurve && typeof pathFocusCurve.getPointAt === 'function' &&
+        pathOffsetCurve && typeof pathOffsetCurve.getPointAt === 'function' &&
+        pathFovCurve && typeof pathFovCurve.getPointAt === 'function') {
+
+      focus  = pathFocusCurve.getPointAt(t);
+      offset = pathOffsetCurve.getPointAt(t);
+      const fovPt = pathFovCurve.getPointAt(t);
+      fov = (fovPt && typeof fovPt.y === 'number')
+        ? fovPt.y
+        : (typeof B.fov === 'number' ? B.fov : 50);
+    } else {
+      focus  = A.focus.clone().lerp(B.focus, s);
+      offset = A.offset.clone().lerp(B.offset, s);
+      fov    = THREE.MathUtils.lerp(A.fov, B.fov, s);
     }
   }
-}catch(_){/* non-fatal */}
 
-return { focus: outFocus, offset: outOffset, fov: outFov };
-
+  // --- Butter Smoothing (critically-damped pose filter) ---
+  let outFocus = focus, outOffset = offset, outFov = fov;
+  try{
+    const bs = (typeof document!=='undefined') ? document.getElementById('butterSmooth') : null;
+    const msEl = (typeof document!=='undefined') ? document.getElementById('butterMs') : null;
+    const enabled = !!(bs && bs.checked);
+    const ms = msEl ? Math.max(0, parseFloat(msEl.value||'800')) : 800;
+    if (enabled && ms > 0) {
+      window.__butterState = window.__butterState || { 
+        has:false, lastP:-1, t:0, 
+        focus:new THREE.Vector3(), dir:new THREE.Vector3(0,0,1), rad:0, fov:0,
+        // Second-order state for velocity smoothing
+        focusVel:new THREE.Vector3(), dirVel:new THREE.Vector3(), radVel:0, fovVel:0
+      };
+      if (__butterState.lastP > globalProgress) { __butterState.has = false; } // reset on loop/restart
+      __butterState.lastP = globalProgress;
+      const now = (typeof performance!=='undefined' ? performance.now()*0.001 : Date.now()*0.001);
+      const prevT = __butterState.t || now;
+      __butterState.t = now;
+      const dt = Math.min(1/15, Math.max(0.00001, now - prevT)); // cap for stability
+      const tau = Math.max(0.001, ms / 1000);
+      
+      // Use a second-order critically damped filter for even smoother motion
+      // This smooths both position AND velocity
+      const zeta = 1.0; // critically damped
+      const omega = 1.0 / tau;
+      const k1 = zeta / (Math.PI * omega);
+      const k2 = 1.0 / ((2 * Math.PI * omega) * (2 * Math.PI * omega));
+      const k3 = zeta * omega;
+      
+      // Simplified second-order response (critically damped)
+      const alpha = Math.min(1.0, dt * omega * 2.0); // Doubled responsiveness for smoother tracking
+  
+      if (!__butterState.has) {
+        __butterState.focus.copy(focus);
+        __butterState.dir.copy(offset.clone().normalize());
+        __butterState.rad = offset.length();
+        __butterState.fov = fov;
+        __butterState.focusVel.set(0,0,0);
+        __butterState.dirVel.set(0,0,0);
+        __butterState.radVel = 0;
+        __butterState.fovVel = 0;
+        __butterState.has = true;
+      } else {
+        // Blend direction on the sphere (unit vectors) — short path
+        const a = __butterState.dir.clone().normalize();
+        let b = offset.clone().normalize();
+        let d = THREE.MathUtils.clamp(a.dot(b), -1, 1);
+        if (d < 0) { b.multiplyScalar(-1); d = -d; }
+        const th = Math.acos(d);
+        let blended;
+        if (th < 1e-5){ blended = a; }
+        else {
+          const sinT = Math.sin(th);
+          const w1 = Math.sin((1 - alpha) * th) / sinT;
+          const w2 = Math.sin(alpha * th) / sinT;
+          blended = a.multiplyScalar(w1).add(b.multiplyScalar(w2)).normalize();
+        }
+  
+        __butterState.dir.copy(blended);
+        __butterState.rad += (offset.length() - __butterState.rad) * alpha;
+        __butterState.focus.lerp(focus, alpha);
+        __butterState.fov += (fov - __butterState.fov) * alpha;
+      }
+  
+      outFocus = __butterState.focus.clone();
+      outOffset = __butterState.dir.clone().multiplyScalar(__butterState.rad);
+      outFov = __butterState.fov;
+      
+      // Triple-Pass Super Smoothing: Apply additional smoothing passes
+      const superEl = (typeof document!=='undefined') ? document.getElementById('superSmooth') : null;
+      if (superEl && superEl.checked && ms > 100) {
+        // Apply two more exponential smoothing passes with reduced time constants
+        // This creates an even smoother S-curve response
+        window.__butterState2 = window.__butterState2 || {
+          focus: outFocus.clone(), offset: outOffset.clone(), fov: outFov
+        };
+        window.__butterState3 = window.__butterState3 || {
+          focus: outFocus.clone(), offset: outOffset.clone(), fov: outFov
+        };
+        
+        // Second pass (50% of main time constant)
+        const alpha2 = Math.min(1.0, dt * omega * 1.0);
+        __butterState2.focus.lerp(outFocus, alpha2);
+        __butterState2.offset.lerp(outOffset, alpha2);
+        __butterState2.fov += (outFov - __butterState2.fov) * alpha2;
+        
+        // Third pass (33% of main time constant)  
+        const alpha3 = Math.min(1.0, dt * omega * 0.67);
+        __butterState3.focus.lerp(__butterState2.focus, alpha3);
+        __butterState3.offset.lerp(__butterState2.offset, alpha3);
+        __butterState3.fov += (__butterState2.fov - __butterState3.fov) * alpha3;
+        
+        // Use the triple-smoothed result
+        outFocus = __butterState3.focus.clone();
+        outOffset = __butterState3.offset.clone();
+        outFov = __butterState3.fov;
+      }
+    }
+  }catch(_){/* non-fatal */}
+  
+  return { focus: outFocus, offset: outOffset, fov: outFov };
 
 }
+
 // We no longer warp per-checkpoint time; easing happens per-DOF in sampling.
 function getCustomPathProgress(easedTime) {
   return getScaledProgress(easedTime);
@@ -4983,60 +4981,62 @@ return;
 })();
 // === end expose photo globals (fixR) ===
 // --- FORCE EXPORT CONTROLS (Gold Master) ---
-try {
-  window.pivot = pivot;
-  window.camera = camera;
-  window.scene = scene;
-  window.applyRig = applyRig;
-  window.__wheelZoomKilled = false;  // Kill flag for aborting zoom inertia
-  
-  // A dedicated function to prepare the rig for a crossfade
-  window.prepareForZoom = function() {
-	// 1. KILL INERTIA
-	// Stop the scroll loop instantly so it can't reset the pivot
-	try {
-	  window.__wheelZoomKilled = true;  // Signal to __wheelZoomStep to abort
-	  if (typeof __wheelZoomRAF !== 'undefined' && __wheelZoomRAF) {
-		cancelAnimationFrame(__wheelZoomRAF);
-		__wheelZoomRAF = null;
-	  }
-	  if (typeof __wheelZoomVel !== 'undefined') __wheelZoomVel = 0;
-	} catch(e) {}
+(function(){
+  try {
+    // Kill flag for aborting zoom inertia (used by wheel zoom)
+    window.__wheelZoomKilled = false;
 
-	// 2. CAPTURE WORLD TRUTH
-	// We calculate the cylindrical coordinates manually here to ensure
-	// we are reading the absolute world position of the camera.
-	const worldPos = new THREE.Vector3();
-	camera.getWorldPosition(worldPos);
-	const rel = worldPos.clone().sub(focus);
-	const phi = Math.atan2(rel.x, rel.z);
-	const r   = Math.max(0.001, Math.hypot(rel.x, rel.z));
-	const elev = rel.y;
+    // Bridge helper used by the deck crossfade code.
+    // IMPORTANT: This version does NOT touch pivot or recouple the rig.
+    // It only:
+    //   1) stops wheel-zoom inertia, and
+    //   2) reports the current cylindrical camera state via cylFromCamera.
+    window.prepareForZoom = function() {
+      // 1. KILL INERTIA
+      // Stop the scroll loop instantly so it can't reset the pivot/camera while we crossfade.
+      try {
+        window.__wheelZoomKilled = true;
+        if (typeof __wheelZoomRAF !== 'undefined' && __wheelZoomRAF) {
+          cancelAnimationFrame(__wheelZoomRAF);
+          __wheelZoomRAF = null;
+        }
+        if (typeof __wheelZoomVel !== 'undefined') {
+          __wheelZoomVel = 0;
+        }
+      } catch (e) {}
 
-	// 3. HARD RECOUPLE
-	// Force the Pivot to match the Camera's angle, then attach the Camera.
-	pivot.position.copy(focus);
-	pivot.rotation.set(0, phi, 0);
-	pivot.updateMatrixWorld(true);
-	
-	pivot.attach(camera);
-	camera.position.set(0, elev, r);
-	camera.lookAt(pivot.position);
-	camera.updateMatrixWorld(true);
+      // 2. READ CURRENT CYLINDRICAL STATE WITHOUT MODIFYING THE RIG
+      if (typeof window.cylFromCamera === 'function') {
+        const c = window.cylFromCamera();
+        return { phi: c.phi, r: c.r, elev: c.elev };
+      }
 
-	// Return the clean start values for the animation
-	return { phi, r, elev };
-  };
+      // Fallback: neutral, in case cylFromCamera is somehow missing.
+      return { phi: 0, r: 2, elev: 0 };
+    };
 
-  window.getPhotoDimensions = function() {
-	if (photoMesh && photoMesh.material && photoMesh.material.map && photoMesh.material.map.image) {
-	   return { w: photoMesh.material.map.image.width, h: photoMesh.material.map.image.height };
-	}
-	return { w: window.photoWidth || 1, h: window.photoHeight || 1 };
-  };
-  console.log('[Bridge] Gold Master Ready.');
-} catch(e) { console.error('[Bridge] Failed:', e); }
-</script>
+    // Expose a stable photo-size helper for the crossfade logic.
+    window.getPhotoDimensions = function() {
+      try {
+        const mesh =
+          (typeof photoMesh !== 'undefined' && photoMesh) ? photoMesh :
+          (window.photoMesh || globalThis.photoMesh || null);
+
+        if (mesh && mesh.material && mesh.material.map && mesh.material.map.image) {
+          return {
+            w: mesh.material.map.image.width,
+            h: mesh.material.map.image.height
+          };
+        }
+      } catch (e) {}
+      return { w: window.photoWidth || 1, h: window.photoHeight || 1 };
+    };
+
+    console.log('[Bridge] Gold Master Ready.');
+  } catch (e) {
+    console.error('[Bridge] Failed:', e);
+  }
+})();</script>
 
 
 <!-- No-inertia guard (appended) -->
