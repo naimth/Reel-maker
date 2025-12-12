@@ -484,7 +484,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 		<!-- NEW: Checkpoint Speed Ramping Controls -->
 		<hr style="border-color:#2a2a35; margin: 8px 0;">
 		<label class="row">
-		  <span><input type="checkbox" id="rampCheckpoints"> Ease at Checkpoints</span>
+		  <span><input type="checkbox" id="rampCheckpoints" checked> Ease at Checkpoints</span>
 		</label>
 
 		<label>Image Fade (ms)
@@ -495,11 +495,11 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 
 		<div class="small" style="margin-top:-4px">Smoothly eases into/out of checkpoints for all motions.</div>
 		<label>Ease Strength<span>
-			<input type="range" id="rampPower" min="1.0" max="200" step="0.5" value="80">
-			<input type="number" id="rampPowerN" min="1.0" max="200" step="0.5" value="80">
+			<input type="range" id="rampPower" min="1.0" max="200" step="0.5" value="150">
+			<input type="number" id="rampPowerN" min="1.0" max="200" step="0.5" value="150">
         </span>
       </label>
-      <div class="small" style="margin-top:-4px">Higher = ultra-smooth corners. Try 80-150 for gimbal-smooth motion. 200 = maximum butter.</div>
+      <div class="small" style="margin-top:-4px">Higher = smoother flow. Lower = more dramatic pauses at waypoints. 150+ for buttery motion.</div>
 
       <!-- NEW: Butter Smoothing (critically-damped pose filter) -->
       <hr style="border-color:#2a2a35; margin: 8px 0;">
@@ -4027,6 +4027,144 @@ function sampleCustomPathAt(globalProgress, easeStrength){
 }
 
 // ============================================
+// BUTTER SMOOTHING - Critically-damped pose filter
+// ============================================
+// This function applies gimbal-like smoothing to camera motion.
+// It uses a critically-damped spring model that smooths both
+// position and velocity for buttery smooth camera movements.
+// 
+// Called from the main animation loop AFTER getUnifiedPathPose()
+// to add final polish to camera motion.
+// ============================================
+function applyButterSmoothing(offset, focus, fov, globalProgress) {
+  // Check if butter smoothing is enabled
+  const bs = document.getElementById('butterSmooth');
+  const msEl = document.getElementById('butterMs');
+  const enabled = !!(bs && bs.checked);
+  const ms = msEl ? Math.max(0, parseFloat(msEl.value || '800')) : 800;
+  
+  // If disabled or zero time, return unchanged
+  if (!enabled || ms <= 0) {
+    return { offset: offset.clone(), focus: focus.clone(), fov };
+  }
+  
+  // Initialize or get butter state
+  window.__butterState = window.__butterState || { 
+    has: false, 
+    lastP: -1, 
+    t: 0, 
+    focus: new THREE.Vector3(), 
+    dir: new THREE.Vector3(0, 0, 1), 
+    rad: 0, 
+    fov: 0
+  };
+  
+  // Reset on loop/restart (when progress jumps backward)
+  if (__butterState.lastP > globalProgress) { 
+    __butterState.has = false; 
+  }
+  __butterState.lastP = globalProgress;
+  
+  // Calculate time delta
+  const now = performance.now() * 0.001;
+  const prevT = __butterState.t || now;
+  __butterState.t = now;
+  const dt = Math.min(1/15, Math.max(0.00001, now - prevT)); // cap for stability
+  
+  // Calculate filter parameters
+  const tau = Math.max(0.001, ms / 1000);
+  const omega = 1.0 / tau;
+  const alpha = Math.min(1.0, dt * omega * 2.0);
+  
+  let outFocus, outOffset, outFov;
+  
+  if (!__butterState.has) {
+    // First frame: initialize state
+    __butterState.focus.copy(focus);
+    __butterState.dir.copy(offset.clone().normalize());
+    __butterState.rad = offset.length();
+    __butterState.fov = fov;
+    __butterState.has = true;
+    
+    outFocus = focus.clone();
+    outOffset = offset.clone();
+    outFov = fov;
+  } else {
+    // Blend direction on the sphere (unit vectors) - short path slerp
+    const a = __butterState.dir.clone().normalize();
+    let b = offset.clone().normalize();
+    let d = THREE.MathUtils.clamp(a.dot(b), -1, 1);
+    
+    // Ensure we take the short path
+    if (d < 0) { 
+      b.multiplyScalar(-1); 
+      d = -d; 
+    }
+    
+    const th = Math.acos(d);
+    let blended;
+    if (th < 1e-5) { 
+      blended = a; 
+    } else {
+      const sinT = Math.sin(th);
+      const w1 = Math.sin((1 - alpha) * th) / sinT;
+      const w2 = Math.sin(alpha * th) / sinT;
+      blended = a.multiplyScalar(w1).add(b.multiplyScalar(w2)).normalize();
+    }
+    
+    // Update state with smoothed values
+    __butterState.dir.copy(blended);
+    __butterState.rad += (offset.length() - __butterState.rad) * alpha;
+    __butterState.focus.lerp(focus, alpha);
+    __butterState.fov += (fov - __butterState.fov) * alpha;
+    
+    outFocus = __butterState.focus.clone();
+    outOffset = __butterState.dir.clone().multiplyScalar(__butterState.rad);
+    outFov = __butterState.fov;
+  }
+  
+  // Triple-Pass Super Smoothing: Apply additional smoothing passes
+  const superEl = document.getElementById('superSmooth');
+  if (superEl && superEl.checked && ms > 100) {
+    window.__butterState2 = window.__butterState2 || {
+      focus: outFocus.clone(), offset: outOffset.clone(), fov: outFov
+    };
+    window.__butterState3 = window.__butterState3 || {
+      focus: outFocus.clone(), offset: outOffset.clone(), fov: outFov
+    };
+    
+    // Reset secondary states on loop
+    if (__butterState.lastP <= 0.01) {
+      __butterState2.focus.copy(outFocus);
+      __butterState2.offset.copy(outOffset);
+      __butterState2.fov = outFov;
+      __butterState3.focus.copy(outFocus);
+      __butterState3.offset.copy(outOffset);
+      __butterState3.fov = outFov;
+    }
+    
+    // Second pass (50% of main time constant)
+    const alpha2 = Math.min(1.0, dt * omega * 1.0);
+    __butterState2.focus.lerp(outFocus, alpha2);
+    __butterState2.offset.lerp(outOffset, alpha2);
+    __butterState2.fov += (outFov - __butterState2.fov) * alpha2;
+    
+    // Third pass (33% of main time constant)  
+    const alpha3 = Math.min(1.0, dt * omega * 0.67);
+    __butterState3.focus.lerp(__butterState2.focus, alpha3);
+    __butterState3.offset.lerp(__butterState2.offset, alpha3);
+    __butterState3.fov += (__butterState2.fov - __butterState3.fov) * alpha3;
+    
+    // Use the triple-smoothed result
+    outFocus = __butterState3.focus.clone();
+    outOffset = __butterState3.offset.clone();
+    outFov = __butterState3.fov;
+  }
+  
+  return { focus: outFocus, offset: outOffset, fov: outFov };
+}
+
+// ============================================
 // UNIFIED PATH PLAYBACK SYSTEM
 // ============================================
 // 
@@ -4249,22 +4387,34 @@ function __velocityZeroEasing(t) {
   // This is the classic "ease in-out sine" - smooth start AND smooth stop
   // Derivative: (π/2) * sin(πt), which is 0 at t=0 and t=1
   
-  // Get the strength from UI (default: moderate easing)
-  const power = parseFloat(document.getElementById('rampPower')?.value || 50) / 50;
+  // Get the strength from UI (1-200 range)
+  // INVERTED: Higher values = smoother/gentler transitions (less extreme easing)
+  //           Lower values = more dramatic pauses at waypoints
+  const rawValue = parseFloat(document.getElementById('rampPower')?.value || 100);
+  
+  // Map 1-200 to easing intensity:
+  // - Value 1 = most extreme (multiple sine iterations, big pauses)
+  // - Value 100 = moderate (single sine ease)
+  // - Value 200 = gentlest (nearly linear, smoothest motion)
+  
+  // Invert: high slider = low intensity
+  const invertedValue = 201 - rawValue; // 1->200, 200->1
+  const power = invertedValue / 100; // 0.01 to 2.0
   
   // Sine-based ease (always has zero velocity at endpoints)
   const sineEased = (1 - Math.cos(Math.PI * t)) / 2;
   
   // Blend between linear and sine-eased based on power
-  // power=0: linear (no easing)
-  // power=1: full sine easing
-  // power>1: apply sine multiple times for even more dramatic slowdown at endpoints
+  // power < 1: blend toward linear (smoother, less dramatic)
+  // power = 1: full single sine easing
+  // power > 1: apply sine multiple times for dramatic slowdown at endpoints
   
   if (power <= 1) {
+    // Blend between linear (smooth) and sine-eased
     return t * (1 - power) + sineEased * power;
   } else {
     // For power > 1, apply sine easing multiple times
-    // Each application makes the endpoints even slower
+    // Each application makes the endpoints even slower (more dramatic pauses)
     let result = t;
     const iterations = Math.min(Math.floor(power), 4); // Cap at 4 iterations
     const remainder = power - iterations;
