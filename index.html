@@ -319,6 +319,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
 @media (max-width: 768px) {
   #mobileHeader { display: block; }
   header { display: none !important; }
+  footer { display: none !important; }
   #toggleControlsBtn { top: auto; bottom: 10px; }
   #app { padding-top: 52px; }
 }
@@ -370,7 +371,7 @@ body.fullscreen-mode canvas { width: 100vw !important; height: 100vh !important;
     <div class="mh-panel" onclick="event.stopPropagation()">
       <div class="mh-row">
         <button id="mhPathRecord" class="primary">Start Path</button>
-        <button id="mhSpeedRamp" style="display:none;">Ramp</button>
+        <button id="mhSpeedRamp" disabled>Ramp</button>
         <button id="mhPathFinish" class="good" disabled>Finish</button>
         <button id="mhPathClear" class="warn" disabled>Clear</button>
       </div>
@@ -2821,12 +2822,21 @@ canvas.addEventListener('wheel', (e)=>{
 	const isActuallyRecording = recorder && recorder.state === 'recording';
 	const fadeMs = 2000; // 2 second fade duration
 	
-	// Calculate fade alpha
+	// Calculate fade alpha for photo (main element)
 	let __fadeAlpha = 1.0;
+	// Calculate faster fade alpha for light source (fades first)
+	let __lightFadeAlpha = 1.0;
+	
 	if (isActuallyRecording) {
 	  const fin = Math.min(1, Math.max(0, elapsedTime / fadeMs));
 	  const fout = Math.min(1, Math.max(0, (durationMs - elapsedTime) / fadeMs));
 	  __fadeAlpha = Math.min(fin, fout);
+	  
+	  // Light fades in at same rate but fades out 50% faster (starts fading earlier)
+	  // Use 1.5x speed for fade-out: light finishes fading when photo is at 66% opacity
+	  const lightFadeOutMs = fadeMs * 0.67; // Light fades out in ~1.33s instead of 2s
+	  const lightFout = Math.min(1, Math.max(0, (durationMs - elapsedTime) / lightFadeOutMs));
+	  __lightFadeAlpha = Math.min(fin, lightFout);
 	}
 	
 	// Calculate motion time - during recording, motion only happens AFTER fade-in completes
@@ -2867,15 +2877,15 @@ canvas.addEventListener('wheel', (e)=>{
 	    photoCoat.material.opacity = __fadeAlpha;
 	  }
 	  
-	  // Fade the sun/star light source - this ensures true black at fade boundaries
+	  // Fade the sun/star light source - fades faster so photo is last visible
 	  const flareStar = scene.getObjectByName('flareStar');
 	  if (flareStar && flareStar.material) {
 	    if (!flareStar.material.transparent) { flareStar.material.transparent = true; flareStar.material.needsUpdate = true; }
-	    flareStar.material.opacity = __fadeAlpha;
+	    flareStar.material.opacity = __lightFadeAlpha;
 	  }
 	  if (flareLight) {
 	    // Also dim the actual light intensity
-	    flareLight.intensity = 2.5 * __fadeAlpha;
+	    flareLight.intensity = 2.5 * __lightFadeAlpha;
 	  }
 	}
 	
@@ -8329,13 +8339,18 @@ console.log('[DIMS] Script loading...');
         }
       });
       
-      // Sync speedramp button specially (has special styling)
+      // Sync speedramp button - enable only when building path
       const mhRamp = document.getElementById('mhSpeedRamp');
       const qcRamp = document.getElementById('qcSpeedRamp');
       if (mhRamp && qcRamp) {
-        mhRamp.disabled = qcRamp.disabled;
-        mhRamp.textContent = qcRamp.textContent.replace('Speedramp ', '');
-        mhRamp.style.display = qcRamp.style.display;
+        // Button is visible when qcSpeedRamp is visible (path building mode)
+        const isVisible = qcRamp.style.display !== 'none';
+        mhRamp.disabled = !isVisible;
+        if (isVisible) {
+          mhRamp.textContent = qcRamp.textContent.replace('Speedramp ', '');
+        } else {
+          mhRamp.textContent = 'Ramp';
+        }
       }
       
       // Sync checkpoint count
